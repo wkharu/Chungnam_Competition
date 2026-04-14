@@ -15,12 +15,28 @@ from lib.weather import fetch_weather
 from lib.recommend import match_from_api
 
 app = FastAPI(title="충남 날씨 관광 추천")
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# React 빌드 결과물 서빙 (frontend/dist 우선, 없으면 기존 static)
+import os
+FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "frontend", "dist")
+STATIC_DIR    = os.path.join(os.path.dirname(__file__), "static")
+
+if os.path.isdir(FRONTEND_DIST):
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
+
+def _index():
+    if os.path.isdir(FRONTEND_DIST):
+        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 @app.get("/")
 async def root():
-    return FileResponse("static/index.html")
+    return _index()
+
+# SPA fallback: /api/* 이외의 모든 경로에서 index.html 반환
+@app.get("/{full_path:path}")
+async def spa_fallback(full_path: str):
+    return _index()
 
 
 @app.get("/api/recommend")
