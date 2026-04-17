@@ -8,8 +8,19 @@ export interface CourseStep {
   loading: boolean
 }
 
-const STEP_LABELS = ['점심 · 카페', '디저트 · 카페', '저녁 코스']
-const STEP_TYPES  = ['restaurant', 'cafe', 'restaurant']
+const STEP_LABELS = ['식사', '카페 · 디저트']
+
+const RESTAURANT_TYPES = new Set([
+  'restaurant', 'korean_restaurant', 'chinese_restaurant',
+  'japanese_restaurant', 'food',
+])
+
+function placeCategory(place: NextPlace): string {
+  for (const t of place.types) {
+    if (RESTAURANT_TYPES.has(t)) return 'restaurant'
+  }
+  return 'cafe'
+}
 
 async function fetchPlaces(
   lat: number, lng: number, category: string, hour: number
@@ -48,7 +59,7 @@ export function useCourse() {
 
     // 다음 단계 로딩 추가
     const nextStep: CourseStep = {
-      label: STEP_LABELS[nextIdx],
+      label: STEP_LABELS[nextIdx] ?? '다음 코스',
       places: [],
       selected: null,
       loading: true,
@@ -56,8 +67,9 @@ export function useCourse() {
     setChain(prev => [...prev.slice(0, nextIdx), nextStep])
 
     try {
-      const hour = new Date().getHours() + (nextIdx * 2)  // 단계마다 2시간 후 가정
-      const places = await fetchPlaces(place.lat, place.lng, STEP_TYPES[nextIdx], hour)
+      const hour = new Date().getHours() + (nextIdx * 2)
+      const category = placeCategory(place)   // 선택한 장소가 식당인지 카페인지
+      const places = await fetchPlaces(place.lat, place.lng, category, hour)
       setChain(prev => prev.map((s, i) =>
         i === nextIdx ? { ...s, places, loading: false } : s
       ))

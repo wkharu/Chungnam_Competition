@@ -17,7 +17,7 @@ const TYPE_LABEL: Record<string, string> = {
   bakery:             '베이커리',
 }
 
-const STEP_ICONS = ['🍽️', '☕', '🌅']
+const STEP_ICONS = ['🍽️', '☕']
 
 function getTypeLabel(types: string[]): string {
   for (const t of types) {

@@ -26,16 +26,20 @@ FIELD_MASK = ",".join([
     "places.priceLevel",
 ])
 
-# 시간대별 다음 코스 카테고리 우선순위
+# 현재 장소 카테고리 → 다음 코스 타입 결정
 def next_types(current_category: str, hour: int) -> list[str]:
-    if 11 <= hour <= 14:          # 점심
-        return ["restaurant", "korean_restaurant", "chinese_restaurant"]
-    elif 14 < hour <= 17:         # 오후
+    if current_category == "restaurant":
+        # 식사 후 → 카페/디저트
         return ["cafe", "coffee_shop", "bakery"]
-    elif 17 < hour <= 21:         # 저녁
+    elif current_category == "cafe":
+        # 카페 후 → 저녁 식사
         return ["restaurant", "korean_restaurant"]
-    else:                         # 오전/기타
-        return ["cafe", "coffee_shop", "restaurant"]
+    else:
+        # 관광지(outdoor/indoor) 후 → 식사 우선 (시간 무관)
+        if 17 < hour <= 22:
+            return ["restaurant", "korean_restaurant", "japanese_restaurant"]
+        else:
+            return ["restaurant", "korean_restaurant", "chinese_restaurant"]
 
 # ── 인메모리 캐시 (좌표 반올림해서 캐시키로) ──────────────
 _cache: dict = {}
