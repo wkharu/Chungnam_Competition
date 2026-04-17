@@ -1,32 +1,74 @@
 import { useState, useCallback } from 'react'
 import type { NextPlace } from '@/types'
 
-export function useCourse() {
-  const [places, setPlaces] = useState<NextPlace[]>([])
-  const [loading, setLoading] = useState(false)
+export interface CourseStep {
+  label: string
+  places: NextPlace[]
+  selected: NextPlace | null
+  loading: boolean
+}
 
-  const fetch = useCallback(async (
-    lat: number,
-    lng: number,
-    category: string,
-  ) => {
-    setLoading(true)
-    setPlaces([])
+const STEP_LABELS = ['점심 · 카페', '디저트 · 카페', '저녁 코스']
+const STEP_TYPES  = ['restaurant', 'cafe', 'restaurant']
+
+async function fetchPlaces(
+  lat: number, lng: number, category: string, hour: number
+): Promise<NextPlace[]> {
+  const res = await window.fetch(
+    `/api/course?lat=${lat}&lng=${lng}&category=${encodeURIComponent(category)}&hour=${hour}`
+  )
+  const data = await res.json()
+  return data.next_places ?? []
+}
+
+export function useCourse() {
+  const [chain, setChain] = useState<CourseStep[]>([])
+
+  // 첫 번째 코스 — 메인 장소 누를 때
+  const fetchFirst = useCallback(async (lat: number, lng: number, category: string) => {
+    setChain([{ label: STEP_LABELS[0], places: [], selected: null, loading: true }])
     try {
       const hour = new Date().getHours()
-      const res = await window.fetch(
-        `/api/course?lat=${lat}&lng=${lng}&category=${encodeURIComponent(category)}&hour=${hour}`
-      )
-      const data = await res.json()
-      setPlaces(data.next_places ?? [])
+      const places = await fetchPlaces(lat, lng, category, hour)
+      setChain([{ label: STEP_LABELS[0], places, selected: null, loading: false }])
     } catch {
-      setPlaces([])
-    } finally {
-      setLoading(false)
+      setChain([{ label: STEP_LABELS[0], places: [], selected: null, loading: false }])
     }
   }, [])
 
-  const clear = useCallback(() => setPlaces([]), [])
+  // 코스 내 장소 선택 → 다음 단계 추가
+  const selectPlace = useCallback(async (stepIdx: number, place: NextPlace) => {
+    // 선택 표시
+    setChain(prev => prev.map((s, i) =>
+      i === stepIdx ? { ...s, selected: place } : s
+    ))
 
-  return { places, loading, fetch, clear }
+    const nextIdx = stepIdx + 1
+    if (nextIdx >= STEP_LABELS.length) return
+
+    // 다음 단계 로딩 추가
+    const nextStep: CourseStep = {
+      label: STEP_LABELS[nextIdx],
+      places: [],
+      selected: null,
+      loading: true,
+    }
+    setChain(prev => [...prev.slice(0, nextIdx), nextStep])
+
+    try {
+      const hour = new Date().getHours() + (nextIdx * 2)  // 단계마다 2시간 후 가정
+      const places = await fetchPlaces(place.lat, place.lng, STEP_TYPES[nextIdx], hour)
+      setChain(prev => prev.map((s, i) =>
+        i === nextIdx ? { ...s, places, loading: false } : s
+      ))
+    } catch {
+      setChain(prev => prev.map((s, i) =>
+        i === nextIdx ? { ...s, loading: false } : s
+      ))
+    }
+  }, [])
+
+  const clear = useCallback(() => setChain([]), [])
+
+  return { chain, fetchFirst, selectPlace, clear }
 }

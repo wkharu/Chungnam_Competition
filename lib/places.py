@@ -51,7 +51,7 @@ def fetch_next_places(
     lng: float,
     current_category: str = "outdoor",
     hour: int = 12,
-    radius_m: int = 3000,
+    radius_m: int = 5000,
     max_results: int = 5,
 ) -> list[dict]:
     """
@@ -98,7 +98,7 @@ def fetch_next_places(
     for p in raw:
         rating = p.get("rating", 0)
         reviews = p.get("userRatingCount", 0)
-        if rating < 3.5 or reviews < 10:   # 저품질 제외
+        if rating < 3.0 or reviews < 3:    # 저품질 제외
             continue
 
         # 사진 URL (첫 번째)
