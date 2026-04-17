@@ -172,6 +172,10 @@ def match_from_api(weather: dict, city: str = "전체", top_n: int = 6,
             weather_score = scores["outdoor"] * w["sunny"]
         else:
             weather_score = scores["indoor"] * w["rainy"]
+            # 야외 날씨가 좋을수록 실내 장소 페널티
+            # outdoor=1.0이면 실내 점수 최대 50% 감소
+            outdoor_penalty = scores["outdoor"] * 0.5
+            weather_score = max(0.0, weather_score - outdoor_penalty)
 
         if dest.get("golden_hour_bonus") and scores["is_golden_hour"]:
             weather_score = min(weather_score + 0.3, 1.0)

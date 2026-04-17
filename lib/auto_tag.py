@@ -122,6 +122,21 @@ COPY_TEMPLATES = {
 }
 
 
+# 이름에 이 키워드가 있으면 실내로 강제 분류 (cat1=A03 오분류 방지)
+_INDOOR_KEYWORDS = [
+    '볼링', '수영장', '실내', '헬스', '스크린골프', '당구', 'PC방',
+    '노래방', '방탈출', '클라이밍', '스쿼시', '탁구', '배드민턴장',
+    '아이스링크', '스케이트', '레이저', '보드게임', '마트',
+]
+
+_INDOOR_PROFILE = {
+    "category": "indoor",
+    "tags": ["실내", "레저", "액티비티"],
+    "weather_weights": {"sunny": 0.3, "cloudy": 0.7, "rainy": 1.0, "fine_dust_limit": "bad"},
+    "golden_hour_bonus": False,
+}
+
+
 def auto_tag(item: dict) -> dict:
     """
     TourAPI item 하나를 받아 날씨 태그가 붙은 destination 형식으로 변환
@@ -129,6 +144,7 @@ def auto_tag(item: dict) -> dict:
     content_type = str(item.get("contenttypeid", "12"))
     cat1 = item.get("cat1", "A01")[:3]
     cat3 = item.get("cat3", "")
+    title = item.get("title", "")
 
     # 1단계: cat1 기본 프로필
     profile = CAT1_PROFILE.get(cat1, CAT1_PROFILE["A01"]).copy()
@@ -143,7 +159,14 @@ def auto_tag(item: dict) -> dict:
         profile["tags"] = override["tags"].copy()
         profile["golden_hour_bonus"] = override["golden_hour_bonus"]
 
-    # 3단계: cat3 세부 보정
+    # 3단계: 이름 기반 실내 강제 분류 (볼링장, 수영장 등 오분류 방지)
+    if any(kw in title for kw in _INDOOR_KEYWORDS):
+        profile["category"] = _INDOOR_PROFILE["category"]
+        profile["weather_weights"] = _INDOOR_PROFILE["weather_weights"].copy()
+        profile["tags"] = _INDOOR_PROFILE["tags"].copy()
+        profile["golden_hour_bonus"] = _INDOOR_PROFILE["golden_hour_bonus"]
+
+    # 4단계: cat3 세부 보정
     if cat3 in CAT3_BONUS:
         bonus = CAT3_BONUS[cat3]
         profile["tags"] = list(set(profile["tags"] + bonus.get("tags", [])))
