@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 Google Places API (New) 연동
-- 특정 좌표 근처 식당/카페 검색
-- 코스 추천에 활용
+- 특정 좌표 근처 식당/카페 검색 (코스 추천)
+- 장소명으로 리뷰 검색 (메인 장소 리뷰)
 """
 import os
 import time
@@ -11,27 +11,57 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-API_KEY  = os.getenv("GOOGLE_PLACES_KEY")
-BASE_URL = "https://places.googleapis.com/v1/places:searchNearby"
+API_KEY       = os.getenv("GOOGLE_PLACES_KEY")
+NEARBY_URL    = "https://places.googleapis.com/v1/places:searchNearby"
+TEXT_URL      = "https://places.googleapis.com/v1/places:searchText"
 
-FIELD_MASK = ",".join([
-    "places.displayName",
-    "places.rating",
-    "places.userRatingCount",
-    "places.formattedAddress",
-    "places.location",
-    "places.currentOpeningHours",
-    "places.photos",
-    "places.types",
-    "places.priceLevel",
-    "places.reviews",
-    "places.websiteUri",
-    "places.googleMapsUri",
+NEARBY_MASK = ",".join([
+    "places.displayName", "places.rating", "places.userRatingCount",
+    "places.formattedAddress", "places.location", "places.currentOpeningHours",
+    "places.photos", "places.types", "places.priceLevel",
+    "places.reviews", "places.websiteUri", "places.googleMapsUri",
 ])
 
-# 현재 장소 카테고리 → 다음 코스 타입 결정
+REVIEW_MASK = ",".join([
+    "places.displayName", "places.rating", "places.userRatingCount",
+    "places.reviews", "places.websiteUri", "places.googleMapsUri",
+    "places.currentOpeningHours",
+])
+
+_cache: dict = {}
+CACHE_TTL = 1800
+
+
+def _cache_get(key: str):
+    if key in _cache:
+        ts, data = _cache[key]
+        if time.time() - ts < CACHE_TTL:
+            return data
+    return None
+
+
+def _cache_set(key, data):
+    _cache[key] = (time.time(), data)
+
+
+def _parse_reviews(raw: list) -> list[dict]:
+    """리뷰 파싱 — publishTime 기준 최신순 정렬, 한국어 우선"""
+    sorted_raw = sorted(raw, key=lambda x: x.get("publishTime", ""), reverse=True)
+    result = []
+    for r in sorted_raw:
+        text = r.get("text", {}).get("text", "").strip()
+        if not text:
+            continue
+        result.append({
+            "author":   r.get("authorAttribution", {}).get("displayName", "익명"),
+            "rating":   r.get("rating", 0),
+            "text":     text,
+            "relative": r.get("relativePublishTimeDescription", ""),
+        })
+    return result
+
+
 def next_types(target_category: str, hour: int) -> list[str]:
-    """사용자가 선택한 다음 코스 카테고리 → Places API 타입"""
     if target_category == "restaurant":
         if 17 < hour <= 22:
             return ["restaurant", "korean_restaurant", "japanese_restaurant"]
@@ -43,41 +73,28 @@ def next_types(target_category: str, hour: int) -> list[str]:
     else:
         return ["restaurant", "korean_restaurant"]
 
-# ── 인메모리 캐시 (좌표 반올림해서 캐시키로) ──────────────
-_cache: dict = {}
-CACHE_TTL = 1800  # 30분
 
-
-def _cache_key(lat: float, lng: float, types: list) -> str:
-    return f"{round(lat,3)}_{round(lng,3)}_{'_'.join(types[:1])}"
-
-
+# ── 코스 추천: 근처 장소 검색 ─────────────────────────────────
 def fetch_next_places(
-    lat: float,
-    lng: float,
+    lat: float, lng: float,
     current_category: str = "outdoor",
     hour: int = 12,
     radius_m: int = 5000,
     max_results: int = 5,
 ) -> list[dict]:
-    """
-    주어진 좌표 근처에서 다음 코스 장소 반환
-    반환: [{ name, address, rating, review_count, open_now, photo_url, types }]
-    """
     if not API_KEY:
         return []
 
     types = next_types(current_category, hour)
-    key   = _cache_key(lat, lng, types)
-
-    if key in _cache:
-        ts, data = _cache[key]
-        if time.time() - ts < CACHE_TTL:
-            return data
+    key   = f"nearby_{round(lat,3)}_{round(lng,3)}_{'_'.join(types[:1])}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
 
     payload = {
-        "includedTypes": types[:3],
-        "maxResultCount": max_results,
+        "includedTypes":      types[:3],
+        "maxResultCount":     max_results,
+        "languageCode":       "ko",
         "locationRestriction": {
             "circle": {
                 "center": {"latitude": lat, "longitude": lng},
@@ -86,15 +103,14 @@ def fetch_next_places(
         },
         "rankPreference": "POPULARITY",
     }
-
     headers = {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": API_KEY,
-        "X-Goog-FieldMask": FIELD_MASK,
+        "Content-Type":    "application/json",
+        "X-Goog-Api-Key":  API_KEY,
+        "X-Goog-FieldMask": NEARBY_MASK,
     }
 
     try:
-        r = requests.post(BASE_URL, json=payload, headers=headers, timeout=8)
+        r = requests.post(NEARBY_URL, json=payload, headers=headers, timeout=8)
         r.raise_for_status()
         raw = r.json().get("places", [])
     except Exception:
@@ -102,12 +118,11 @@ def fetch_next_places(
 
     results = []
     for p in raw:
-        rating = p.get("rating", 0)
+        rating  = p.get("rating", 0)
         reviews = p.get("userRatingCount", 0)
-        if rating < 3.0 or reviews < 3:    # 저품질 제외
+        if rating < 3.0 or reviews < 3:
             continue
 
-        # 사진 URL (첫 번째)
         photo_url = None
         photos = p.get("photos", [])
         if photos:
@@ -123,19 +138,6 @@ def fetch_next_places(
         if "openNow" in oh:
             open_now = oh["openNow"]
 
-        # 리뷰 최대 3개
-        raw_reviews = p.get("reviews", [])[:3]
-        review_list = [
-            {
-                "author":   r.get("authorAttribution", {}).get("displayName", "익명"),
-                "rating":   r.get("rating", 0),
-                "text":     r.get("text", {}).get("text", ""),
-                "relative": r.get("relativePublishTimeDescription", ""),
-            }
-            for r in raw_reviews
-            if r.get("text", {}).get("text", "")
-        ]
-
         results.append({
             "name":         p["displayName"]["text"],
             "address":      p.get("formattedAddress", ""),
@@ -146,10 +148,65 @@ def fetch_next_places(
             "types":        p.get("types", []),
             "lat":          p["location"]["latitude"],
             "lng":          p["location"]["longitude"],
-            "reviews":      review_list,
+            "reviews":      _parse_reviews(p.get("reviews", [])),
             "website":      p.get("websiteUri", ""),
             "google_maps":  p.get("googleMapsUri", ""),
         })
 
-    _cache[key] = (time.time(), results)
+    _cache_set(key, results)
     return results
+
+
+# ── 메인 장소 리뷰: 장소명 Text Search ───────────────────────
+def fetch_place_reviews(name: str, lat: float, lng: float) -> dict:
+    """장소명으로 Google Places 검색 → 리뷰(최신순, 한국어) 반환"""
+    if not API_KEY:
+        return {}
+
+    key = f"review_{name}_{round(lat,3)}_{round(lng,3)}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
+    payload = {
+        "textQuery":    name,
+        "languageCode": "ko",
+        "maxResultCount": 1,
+        "locationBias": {
+            "circle": {
+                "center": {"latitude": lat, "longitude": lng},
+                "radius": 2000.0,
+            }
+        },
+    }
+    headers = {
+        "Content-Type":    "application/json",
+        "X-Goog-Api-Key":  API_KEY,
+        "X-Goog-FieldMask": REVIEW_MASK,
+    }
+
+    try:
+        r = requests.post(TEXT_URL, json=payload, headers=headers, timeout=8)
+        r.raise_for_status()
+        places = r.json().get("places", [])
+        if not places:
+            return {}
+        p = places[0]
+    except Exception:
+        return {}
+
+    open_now = None
+    oh = p.get("currentOpeningHours", {})
+    if "openNow" in oh:
+        open_now = oh["openNow"]
+
+    result = {
+        "rating":       p.get("rating", 0),
+        "review_count": p.get("userRatingCount", 0),
+        "reviews":      _parse_reviews(p.get("reviews", [])),
+        "website":      p.get("websiteUri", ""),
+        "google_maps":  p.get("googleMapsUri", ""),
+        "open_now":     open_now,
+    }
+    _cache_set(key, result)
+    return result
