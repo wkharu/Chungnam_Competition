@@ -54,7 +54,7 @@ export default function App() {
     setSelectedDest(dest)
     const coords = dest.coords
     if (coords) {
-      course.fetchFirst(coords.lat, coords.lng, dest.category ?? 'outdoor')
+      course.fetchFirst(coords.lat, coords.lng, dest.name)
     }
   }
 
@@ -114,6 +114,7 @@ export default function App() {
             {selectedDest?.name === shown[0].name && (
               <CoursePanel
                 chain={course.chain}
+                onSelectCategory={course.selectCategory}
                 onSelectPlace={course.selectPlace}
                 onClose={handleCourseClose}
               />
@@ -133,6 +134,7 @@ export default function App() {
                     {selectedDest?.name === d.name && (
                       <CoursePanel
                         chain={course.chain}
+                        onSelectCategory={course.selectCategory}
                         onSelectPlace={course.selectPlace}
                         onClose={handleCourseClose}
                       />

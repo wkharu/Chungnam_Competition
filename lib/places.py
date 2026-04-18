@@ -24,22 +24,24 @@ FIELD_MASK = ",".join([
     "places.photos",
     "places.types",
     "places.priceLevel",
+    "places.reviews",
+    "places.websiteUri",
+    "places.googleMapsUri",
 ])
 
 # 현재 장소 카테고리 → 다음 코스 타입 결정
-def next_types(current_category: str, hour: int) -> list[str]:
-    if current_category == "restaurant":
-        # 식사 후 → 카페/디저트
-        return ["cafe", "coffee_shop", "bakery"]
-    elif current_category == "cafe":
-        # 카페 후 → 저녁 식사
-        return ["restaurant", "korean_restaurant"]
-    else:
-        # 관광지(outdoor/indoor) 후 → 식사 우선 (시간 무관)
+def next_types(target_category: str, hour: int) -> list[str]:
+    """사용자가 선택한 다음 코스 카테고리 → Places API 타입"""
+    if target_category == "restaurant":
         if 17 < hour <= 22:
             return ["restaurant", "korean_restaurant", "japanese_restaurant"]
-        else:
-            return ["restaurant", "korean_restaurant", "chinese_restaurant"]
+        return ["restaurant", "korean_restaurant", "chinese_restaurant"]
+    elif target_category == "cafe":
+        return ["cafe", "coffee_shop", "bakery"]
+    elif target_category == "attraction":
+        return ["tourist_attraction", "museum", "park", "art_gallery"]
+    else:
+        return ["restaurant", "korean_restaurant"]
 
 # ── 인메모리 캐시 (좌표 반올림해서 캐시키로) ──────────────
 _cache: dict = {}
@@ -121,6 +123,19 @@ def fetch_next_places(
         if "openNow" in oh:
             open_now = oh["openNow"]
 
+        # 리뷰 최대 3개
+        raw_reviews = p.get("reviews", [])[:3]
+        review_list = [
+            {
+                "author":   r.get("authorAttribution", {}).get("displayName", "익명"),
+                "rating":   r.get("rating", 0),
+                "text":     r.get("text", {}).get("text", ""),
+                "relative": r.get("relativePublishTimeDescription", ""),
+            }
+            for r in raw_reviews
+            if r.get("text", {}).get("text", "")
+        ]
+
         results.append({
             "name":         p["displayName"]["text"],
             "address":      p.get("formattedAddress", ""),
@@ -131,6 +146,9 @@ def fetch_next_places(
             "types":        p.get("types", []),
             "lat":          p["location"]["latitude"],
             "lng":          p["location"]["longitude"],
+            "reviews":      review_list,
+            "website":      p.get("websiteUri", ""),
+            "google_maps":  p.get("googleMapsUri", ""),
         })
 
     _cache[key] = (time.time(), results)

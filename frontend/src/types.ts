@@ -25,6 +25,13 @@ export interface Destination {
   coords?: { lat: number; lng: number }
 }
 
+export interface PlaceReview {
+  author: string
+  rating: number
+  text: string
+  relative: string
+}
+
 export interface NextPlace {
   name: string
   address: string
@@ -35,6 +42,9 @@ export interface NextPlace {
   types: string[]
   lat: number
   lng: number
+  reviews: PlaceReview[]
+  website: string
+  google_maps: string
 }
 
 export interface RecommendResponse {
