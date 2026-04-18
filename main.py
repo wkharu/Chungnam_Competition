@@ -73,12 +73,13 @@ async def place_reviews(
     name: str = Query(...),
     lat: float = Query(...),
     lng: float = Query(...),
+    address: str = Query(default=""),
 ):
     """메인 추천 장소의 Google 리뷰 조회"""
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None, lambda: fetch_place_reviews(name, lat, lng)
+            None, lambda: fetch_place_reviews(name, lat, lng, address)
         )
         return result
     except Exception as e:

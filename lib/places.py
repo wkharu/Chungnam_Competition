@@ -158,7 +158,7 @@ def fetch_next_places(
 
 
 # ── 메인 장소 리뷰: 장소명 Text Search ───────────────────────
-def fetch_place_reviews(name: str, lat: float, lng: float) -> dict:
+def fetch_place_reviews(name: str, lat: float, lng: float, address: str = "") -> dict:
     """장소명으로 Google Places 검색 → 리뷰(최신순, 한국어) 반환"""
     if not API_KEY:
         return {}
@@ -168,14 +168,22 @@ def fetch_place_reviews(name: str, lat: float, lng: float) -> dict:
     if cached is not None:
         return cached
 
+    # 주소에서 시/군 추출해 쿼리에 포함 → 동명 타지역 장소 필터링
+    city_hint = ""
+    if address:
+        parts = address.replace("충청남도 ", "").split()
+        if parts:
+            city_hint = f" {parts[0]}"
+
     payload = {
-        "textQuery":    name,
-        "languageCode": "ko",
+        "textQuery":      f"{name}{city_hint}",
+        "languageCode":   "ko",
         "maxResultCount": 1,
-        "locationBias": {
+        # locationBias(우선순위) → locationRestriction(엄격 제한)으로 변경
+        "locationRestriction": {
             "circle": {
                 "center": {"latitude": lat, "longitude": lng},
-                "radius": 2000.0,
+                "radius": 5000.0,   # 5km 이내만 허용
             }
         },
     }

@@ -15,12 +15,12 @@ export function usePlaceReviews() {
   const [loading, setLoading] = useState(false)
   const [fetched, setFetched] = useState(false)
 
-  const fetch = useCallback(async (name: string, lat: number, lng: number) => {
-    if (fetched) return   // 이미 로딩했으면 재요청 안 함
+  const fetch = useCallback(async (name: string, lat: number, lng: number, address = '') => {
+    if (fetched) return
     setLoading(true)
     try {
       const res = await window.fetch(
-        `/api/place-reviews?name=${encodeURIComponent(name)}&lat=${lat}&lng=${lng}`
+        `/api/place-reviews?name=${encodeURIComponent(name)}&lat=${lat}&lng=${lng}&address=${encodeURIComponent(address)}`
       )
       const json = await res.json()
       setData(json?.reviews ? json : null)

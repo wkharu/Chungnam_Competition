@@ -19,12 +19,12 @@ export default function DestinationCard({ destination: d, rank, onNextCourse, is
 }
 
 /* ── 리뷰 패널 (공통) ─────────────────────────────────────── */
-function ReviewPanel({ name, lat, lng }: { name: string; lat: number; lng: number }) {
+function ReviewPanel({ name, lat, lng, address }: { name: string; lat: number; lng: number; address: string }) {
   const { data, loading, fetched, fetch } = usePlaceReviews()
   const [open, setOpen] = useState(false)
 
   function toggle() {
-    if (!open && !fetched) fetch(name, lat, lng)
+    if (!open && !fetched) fetch(name, lat, lng, address)
     setOpen(v => !v)
   }
 
@@ -175,7 +175,7 @@ function FeaturedCard({
           )}
         </div>
 
-        {lat !== 0 && <ReviewPanel name={d.name} lat={lat} lng={lng} />}
+        {lat !== 0 && <ReviewPanel name={d.name} lat={lat} lng={lng} address={d.address} />}
       </div>
     </div>
   )
@@ -202,7 +202,7 @@ function CompactCard({
   const kakaoUrl = `https://map.kakao.com/link/search/${encodeURIComponent(d.name)}`
 
   function toggleReview() {
-    if (!showReview && !fetched) fetch(d.name, lat, lng)
+    if (!showReview && !fetched) fetch(d.name, lat, lng, d.address)
     setShowReview(v => !v)
   }
 
