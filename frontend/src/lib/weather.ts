@@ -1,7 +1,7 @@
 export type WeatherTheme = 'sunny' | 'cloudy' | 'rainy'
 
 export function getTheme(sky: number, precipProb: number): WeatherTheme {
-  if (precipProb >= 70) return 'rainy'
+  if (precipProb >= 60) return 'rainy'
   if (sky === 1) return 'sunny'
   return 'cloudy'
 }

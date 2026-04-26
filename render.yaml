@@ -9,5 +9,9 @@ services:
         sync: false
       - key: WEATHER_API_KEY
         sync: false
+      - key: AIR_KOREA_API_KEY
+        sync: false
+      - key: GOOGLE_PLACES_KEY
+        sync: false
       - key: NODE_VERSION
         value: 20.11.0

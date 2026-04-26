@@ -9,7 +9,14 @@
     "temp_range": { "min": 10, "max": 32 },
     "golden_hour_bonus": true,
     "copy": "오늘 하늘이 맑으니 테라스 자리 먼저 잡으세요.",
-    "coords": { "lat": 36.7969, "lng": 127.0137 }
+    "coords": { "lat": 36.7969, "lng": 127.0137 },
+    "companion_fit": ["couple", "friends"],
+    "activity_level": "moderate",
+    "avg_stay_minutes": 90,
+    "best_months": [4, 5, 9, 10],
+    "best_time_slots": ["afternoon", "golden_hour"],
+    "opening_hours_note": "매장별 상이 — 방문 전 확인",
+    "parking_note": "인근 공영·노상 주차 가능(혼잡 시 대기)"
   },
   {
     "id": "oeam_village",
@@ -33,7 +40,20 @@
     "temp_range": { "min": -20, "max": 40 },
     "golden_hour_bonus": false,
     "copy": "궂은 날씨엔 여기가 정답입니다.",
-    "coords": { "lat": 36.7897, "lng": 127.0041 }
+    "coords": { "lat": 36.7897, "lng": 127.0041 },
+    "companion_fit": ["family", "solo", "couple"],
+    "activity_level": "low",
+    "avg_stay_minutes": 120,
+    "opening_hours_note": "휴관일·관람시간 시설 안내 확인",
+    "parking_note": "주차장 있음(만차 가능)",
+    "role_tags": ["museum", "indoor_culture", "family"],
+    "recommended_next_steps": ["meal", "cafe_rest", "indoor_backup"],
+    "avg_stay_minutes": 120,
+    "activity_level": "low",
+    "family_fit": 0.85,
+    "photo_fit": 0.35,
+    "healing_fit": 0.45,
+    "indoor_ratio": 0.95
   },
   {
     "id": "paradise_spa",
@@ -45,7 +65,12 @@
     "temp_range": { "min": -20, "max": 40 },
     "golden_hour_bonus": false,
     "copy": "추운 날일수록 온천 효과가 배가됩니다.",
-    "coords": { "lat": 36.7563, "lng": 126.9865 }
+    "coords": { "lat": 36.7563, "lng": 126.9865 },
+    "companion_fit": ["couple", "family", "friends"],
+    "activity_level": "low",
+    "avg_stay_minutes": 180,
+    "opening_hours_note": "시즌·요일별 요금·시간 상이",
+    "parking_note": "시설 주차(혼잡 시 안내)"
   },
   {
     "id": "gokgyocheon",
@@ -57,7 +82,15 @@
     "temp_range": { "min": 5, "max": 28 },
     "golden_hour_bonus": true,
     "copy": "맑은 가을날 노란 은행잎이 절정입니다.",
-    "coords": { "lat": 36.7896, "lng": 127.0215 }
+    "coords": { "lat": 36.7896, "lng": 127.0215 },
+    "role_tags": ["nature_walk", "photo_spot", "family_outdoor"],
+    "recommended_next_steps": ["meal", "cafe_rest", "short_walk"],
+    "avg_stay_minutes": 70,
+    "activity_level": "medium",
+    "family_fit": 0.7,
+    "photo_fit": 0.65,
+    "healing_fit": 0.75,
+    "indoor_ratio": 0.1
   },
   {
     "id": "gongju_fortress",

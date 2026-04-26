@@ -30,14 +30,19 @@ def calc_weather_score(weather: dict) -> dict:
     dust        = weather.get("dust", 1)
     hour        = weather.get("hour", datetime.now().hour)
 
-    # 개별 점수
-    temp_score   = calc_temp_score(temp)
-    precip_score = (
-        1.0 if precip_prob < 20 else
-        0.6 if precip_prob < 40 else
-        0.3 if precip_prob < 70 else
-        0.0
-    )
+    # 개별 점수 — precip_score: 야외 활동에 “덜 불리한” 정도(높을수록 맑음에 가까움)
+    temp_score = calc_temp_score(temp)
+    pp = float(precip_prob)
+    if pp <= 30:
+        precip_score = 1.0
+    elif pp <= 50:
+        precip_score = 1.0 - (pp - 30) / 20 * 0.45  # 30→1.0, 50→0.55
+    elif pp <= 60:
+        precip_score = 0.55 - (pp - 50) / 10 * 0.33  # 50→0.55, 60→0.22
+    elif pp <= 85:
+        precip_score = 0.22 - (pp - 60) / 25 * 0.17  # 60→0.22, 85→0.05
+    else:
+        precip_score = max(0.0, 0.05 - (pp - 85) / 15 * 0.05)
     sky_score  = 1.0 if sky == 1 else 0.6 if sky == 3 else 0.3
     dust_score = 1.0 if dust == 1 else 0.7 if dust == 2 else 0.3 if dust == 3 else 0.0
 
@@ -53,7 +58,8 @@ def calc_weather_score(weather: dict) -> dict:
         "outdoor": round(outdoor_score, 3),
         "photo":   round(min(photo_score, 1.0), 3),
         "indoor":  round(indoor_score, 3),
-        "is_raining":     precip_prob >= 70,
+        # 60% 이상: 야외 하드필터·코스 구성 모두 “우천 대비” 구간으로 본다
+        "is_raining":     pp >= 60,
         "is_dust_bad":    dust >= 3,
         "is_golden_hour": is_golden_hour,
     }

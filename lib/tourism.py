@@ -3,14 +3,17 @@
 한국관광공사 TourAPI 4.0 연동
 docs: https://api.visitkorea.or.kr
 """
-import os
+import sys
+from pathlib import Path
+
+# `python lib/tourism.py` 직접 실행 시에도 프로젝트 루트가 path에 오도록 함
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import requests
-from dotenv import load_dotenv
 
-load_dotenv()
-
-API_KEY   = os.getenv("TOUR_API_KEY")
-BASE_URL  = "https://apis.data.go.kr/B551011/KorService2"
+from lib.config import settings
 
 # 충남 지역코드
 AREA_CODE = 34  # 충청남도
@@ -51,8 +54,11 @@ def fetch_attractions(city: str = "아산", content_type: str = "관광지", num
     if sigungu is None:
         raise ValueError(f"지원하지 않는 도시: {city}")
 
+    if not settings.tour_api_key:
+        return []
+
     params = {
-        "serviceKey":    API_KEY,
+        "serviceKey":    settings.tour_api_key,
         "numOfRows":     num,
         "pageNo":        1,
         "MobileOS":      "ETC",
@@ -64,7 +70,7 @@ def fetch_attractions(city: str = "아산", content_type: str = "관광지", num
         "arrange":       "A",  # 제목순
     }
 
-    url = f"{BASE_URL}/areaBasedList2"
+    url = f"{settings.tour_base_url}/areaBasedList2"
     response = requests.get(url, params=params, timeout=10)
     response.raise_for_status()
     data = response.json()
@@ -93,8 +99,11 @@ def fetch_attractions(city: str = "아산", content_type: str = "관광지", num
 
 def fetch_detail(content_id: str) -> dict:
     """관광지 상세 정보 조회"""
+    if not settings.tour_api_key:
+        raise ValueError("TOUR_API_KEY가 설정되지 않았습니다.")
+
     params = {
-        "serviceKey": API_KEY,
+        "serviceKey": settings.tour_api_key,
         "MobileOS":   "ETC",
         "MobileApp":  "ChungnamTour",
         "_type":      "json",
@@ -105,7 +114,7 @@ def fetch_detail(content_id: str) -> dict:
         "mapinfoYN":  "Y",
     }
 
-    url = f"{BASE_URL}/detailCommon1"
+    url = f"{settings.tour_base_url}/detailCommon1"
     response = requests.get(url, params=params, timeout=10)
     response.raise_for_status()
     data = response.json()

@@ -1,19 +1,42 @@
-import { useState, useCallback } from 'react'
-import type { NextPlace } from '@/types'
+import { useState, useCallback, useRef } from 'react'
+
+import type { CourseContinuationResponse, NextPlace, Weather } from '@/types'
+import type { TripDuration } from '@/hooks/useRecommend'
+import {
+  fetchCoursePayload,
+  type CourseFetchContext,
+} from '@/lib/courseClient'
+
+export type { CourseFetchContext } from '@/lib/courseClient'
 
 export interface CourseStep {
   label: string
   places: NextPlace[]
+  payload?: CourseContinuationResponse | null
   selected: NextPlace | null
   loading: boolean
 }
 
-const STEP_LABELS = ['식사', '카페 · 디저트']
-
 const RESTAURANT_TYPES = new Set([
-  'restaurant', 'korean_restaurant', 'chinese_restaurant',
-  'japanese_restaurant', 'food',
+  'restaurant',
+  'korean_restaurant',
+  'chinese_restaurant',
+  'japanese_restaurant',
+  'food',
 ])
+
+/** 일정 길이별 최대 코스 단계 수(첫 화면 포함): 2h→2, 반나절→3, 종일→4 */
+export function maxCourseStepsForDuration(d: TripDuration): number {
+  if (d === '2h') return 2
+  if (d === 'full-day') return 4
+  return 3
+}
+
+function continuationLabels(d: TripDuration): string[] {
+  if (d === '2h') return ['다음 한 곳']
+  if (d === 'full-day') return ['점심·휴식', '오후 장면', '저녁·마무리']
+  return ['쉬었다 가기', '마무리 동선']
+}
 
 function placeCategory(place: NextPlace): string {
   for (const t of place.types) {
@@ -22,61 +45,98 @@ function placeCategory(place: NextPlace): string {
   return 'cafe'
 }
 
-async function fetchPlaces(
-  lat: number, lng: number, category: string, hour: number
-): Promise<NextPlace[]> {
-  const res = await window.fetch(
-    `/api/course?lat=${lat}&lng=${lng}&category=${encodeURIComponent(category)}&hour=${hour}`
-  )
-  const data = await res.json()
-  return data.next_places ?? []
-}
-
 export function useCourse() {
   const [chain, setChain] = useState<CourseStep[]>([])
+  const lastWeatherRef = useRef<Weather | null>(null)
+  const lastDurationRef = useRef<TripDuration>('half-day')
+  const lastIntentRef = useRef({
+    companion: 'solo',
+    trip_goal: 'healing',
+    transport: 'car',
+    adult_count: '2',
+    child_count: '0',
+  })
 
-  // 첫 번째 코스 — 메인 장소 누를 때
-  const fetchFirst = useCallback(async (lat: number, lng: number, category: string) => {
-    setChain([{ label: STEP_LABELS[0], places: [], selected: null, loading: true }])
-    try {
-      const hour = new Date().getHours()
-      const places = await fetchPlaces(lat, lng, category, hour)
-      setChain([{ label: STEP_LABELS[0], places, selected: null, loading: false }])
-    } catch {
-      setChain([{ label: STEP_LABELS[0], places: [], selected: null, loading: false }])
-    }
-  }, [])
+  const fetchFirst = useCallback(
+    async (
+      lat: number,
+      lng: number,
+      category: string,
+      ctx?: CourseFetchContext,
+    ) => {
+      lastWeatherRef.current = ctx?.weather ?? null
+      lastDurationRef.current = ctx?.duration ?? 'half-day'
+      lastIntentRef.current = {
+        companion: ctx?.companion ?? 'solo',
+        trip_goal: ctx?.trip_goal ?? 'healing',
+        transport: ctx?.transport ?? 'car',
+        adult_count: ctx?.adult_count ?? '2',
+        child_count: ctx?.child_count ?? '0',
+      }
 
-  // 코스 내 장소 선택 → 다음 단계 추가
+      setChain([{ label: '코스 이어가기', places: [], payload: null, selected: null, loading: true }])
+      try {
+        const hour = new Date().getHours()
+        const data = await fetchCoursePayload(lat, lng, category, hour, ctx)
+        setChain([
+          {
+            label: '코스 이어가기',
+            places: data.next_places ?? [],
+            payload: data,
+            selected: null,
+            loading: false,
+          },
+        ])
+      } catch {
+        setChain([{ label: '코스 이어가기', places: [], payload: null, selected: null, loading: false }])
+      }
+    },
+    [],
+  )
+
   const selectPlace = useCallback(async (stepIdx: number, place: NextPlace) => {
-    // 선택 표시
-    setChain(prev => prev.map((s, i) =>
-      i === stepIdx ? { ...s, selected: place } : s
-    ))
-
+    setChain(prev => prev.map((s, i) => (i === stepIdx ? { ...s, selected: place } : s)))
     const nextIdx = stepIdx + 1
-    if (nextIdx >= STEP_LABELS.length) return
+    const maxSteps = maxCourseStepsForDuration(lastDurationRef.current)
+    if (nextIdx >= maxSteps) return
 
-    // 다음 단계 로딩 추가
+    const labels = continuationLabels(lastDurationRef.current)
+    const lbl = labels[nextIdx - 1] ?? `다음 코스 ${nextIdx}`
+
     const nextStep: CourseStep = {
-      label: STEP_LABELS[nextIdx] ?? '다음 코스',
+      label: lbl,
       places: [],
+      payload: null,
       selected: null,
       loading: true,
     }
     setChain(prev => [...prev.slice(0, nextIdx), nextStep])
 
     try {
-      const hour = new Date().getHours() + (nextIdx * 2)
-      const category = placeCategory(place)   // 선택한 장소가 식당인지 카페인지
-      const places = await fetchPlaces(place.lat, place.lng, category, hour)
-      setChain(prev => prev.map((s, i) =>
-        i === nextIdx ? { ...s, places, loading: false } : s
-      ))
+      const hour = new Date().getHours()
+      const category = placeCategory(place)
+      const data = await fetchCoursePayload(place.lat, place.lng, category, hour, {
+        spotId: place.place_id,
+        spotName: place.name,
+        weather: lastWeatherRef.current ?? undefined,
+        duration: lastDurationRef.current,
+        companion: lastIntentRef.current.companion,
+        trip_goal: lastIntentRef.current.trip_goal,
+        transport: lastIntentRef.current.transport,
+        adult_count: lastIntentRef.current.adult_count,
+        child_count: lastIntentRef.current.child_count,
+      })
+      setChain(prev =>
+        prev.map((s, i) =>
+          i === nextIdx
+            ? { ...s, places: data.next_places ?? [], payload: data, loading: false }
+            : s,
+        ),
+      )
     } catch {
-      setChain(prev => prev.map((s, i) =>
-        i === nextIdx ? { ...s, loading: false } : s
-      ))
+      setChain(prev =>
+        prev.map((s, i) => (i === nextIdx ? { ...s, loading: false } : s)),
+      )
     }
   }, [])
 
