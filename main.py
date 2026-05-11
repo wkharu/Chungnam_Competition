@@ -25,9 +25,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from lib.weather import fetch_weather
 from lib.recommend import match_from_api
-from lib.places import fetch_continuation_candidates
+from lib.places import fetch_continuation_candidates, fetch_place_reviews
 from lib.course_continuation import build_course_payload
-from lib.daytrip_planner import build_daytrip_payload, normalize_intent
+from lib.daytrip_planner import build_daytrip_payload
+from lib.intent_normalize import normalize_intent
 from lib.scoring import calc_weather_score
 
 app = FastAPI(title="충남 날씨 관광 추천")
@@ -54,6 +55,18 @@ async def recommend(
     top_n: int = Query(default=40),
     user_lat: float = Query(default=None),
     user_lng: float = Query(default=None),
+    current_time: str | None = Query(
+        default=None,
+        description="현재 시각 HH:MM (코스·랭킹 시간축)",
+    ),
+    current_date: str | None = Query(
+        default=None,
+        description="방문 기준일 YYYY-MM-DD (시간표 시작일)",
+    ),
+    meal_preference: str | None = Query(
+        default=None,
+        description="식사 선호(자유 텍스트·짧게). 없으면 none",
+    ),
     companion: str | None = Query(default=None),
     trip_goal: str | None = Query(default=None),
     duration: str | None = Query(default=None),
@@ -67,6 +80,22 @@ async def recommend(
         weather = await loop.run_in_executor(
             None, fetch_weather, city if city != "전체" else "아산"
         )
+        weather.setdefault("minute", 0)
+        if current_time:
+            parts = str(current_time).strip().split(":")
+            try:
+                weather["hour"] = int(parts[0]) % 24
+            except (TypeError, ValueError):
+                pass
+            if len(parts) >= 2:
+                try:
+                    weather["minute"] = int(parts[1]) % 60
+                except (TypeError, ValueError):
+                    weather["minute"] = 0
+        if current_date:
+            ds = str(current_date).strip()
+            if ds:
+                weather["current_date_iso"] = ds
         intent = normalize_intent(
             companion,
             trip_goal,
@@ -74,6 +103,7 @@ async def recommend(
             transport,
             adult_count=adult_count,
             child_count=child_count,
+            meal_preference=meal_preference,
         )
         pp0 = float(weather.get("precip_prob", 0) or 0)
         # 강수 48% 이상: 상위 N에 실내가 안 들어오는 경우가 있어 후보 깊이 확장
@@ -90,10 +120,21 @@ async def recommend(
                 intent=intent,
             ),
         )
+        trip_context = {
+            "clock_hour": weather.get("hour"),
+            "clock_minute": int(weather.get("minute", 0) or 0),
+            "current_date_iso": weather.get("current_date_iso"),
+            "meal_preference": intent.get("meal_preference"),
+            "user_lat": user_lat,
+            "user_lng": user_lng,
+        }
         payload = await loop.run_in_executor(
             None,
             lambda: build_daytrip_payload(
-                weather=weather, match_result=result, intent=intent
+                weather=weather,
+                match_result=result,
+                intent=intent,
+                trip_context=trip_context,
             ),
         )
         # 단기예보·에어코리아 확장 필드 (Vite 앱·static 공통)
@@ -108,6 +149,25 @@ async def recommend(
 
         return payload
 
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/place-reviews")
+async def place_reviews(
+    name: str = Query(...),
+    lat: float = Query(...),
+    lng: float = Query(...),
+    address: str = Query(default=""),
+):
+    """메인 추천 장소의 Google 리뷰 조회"""
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, lambda: fetch_place_reviews(name, lat, lng, address)
+        )
+        return result
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -148,6 +208,28 @@ async def course(
     indoor_bias: float = Query(default=0.0, ge=0.0, le=1.0),
     meal_bias: float = Query(default=0.0, ge=0.0, le=1.0),
     cafe_bias: float = Query(default=0.0, ge=0.0, le=1.0),
+    reconfigure_target: str | None = Query(
+        default=None,
+        description="재구성 UX: 수정 대상 식별(top|active:main|active:alt:…|alt:…). 향후 분석·분기용.",
+    ),
+    selected_course_type: str | None = Query(
+        default=None,
+        description="재구성 UX: active|top|alternative",
+    ),
+    course_id: str | None = Query(
+        default=None,
+        description="재구성 UX: 편집 기준 코스 id(있을 때)",
+    ),
+    replace_step: bool = Query(default=False, description="True면 단계 교체 후보만(리뷰 메타 재랭킹 포함)"),
+    step_index: int | None = Query(default=None, ge=0, le=20, description="교체 대상 단계 인덱스(0부터)"),
+    step_role: str | None = Query(
+        default=None,
+        description="교체 대상 단계 역할(main_spot|meal|cafe_rest|secondary_spot|finish)",
+    ),
+    time_band: str | None = Query(
+        default=None,
+        description="morning|lunch|afternoon|evening|night|early — 비우면 서버가 hour로 산출",
+    ),
 ):
     """코스 이어가기 — 다음 장면(단계) 결정 후 Places 후보를 재랭킹."""
     try:
@@ -194,6 +276,10 @@ async def course(
                 indoor_bias=indoor_bias,
                 meal_bias=meal_bias,
                 cafe_bias=cafe_bias,
+                replace_step=replace_step,
+                replace_step_index=step_index,
+                replace_step_role=step_role,
+                time_band=time_band,
             )
 
         payload = await loop.run_in_executor(None, _run)

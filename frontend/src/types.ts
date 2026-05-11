@@ -4,6 +4,10 @@ export interface Weather {
   sky: number
   sky_text: string
   dust: number
+  /** 추천에 사용한 시각(선택) */
+  hour?: number
+  minute?: number
+  current_date_iso?: string | null
   /** 에어코리아 시도 평균 등 연동 시 */
   pm25?: number | null
   pm10?: number | null
@@ -94,6 +98,13 @@ export interface Destination {
   review_count?: number
 }
 
+export interface PlaceReview {
+  author: string
+  rating: number
+  text: string
+  relative: string
+}
+
 export interface NextPlace {
   place_id?: string
   name: string
@@ -115,6 +126,10 @@ export interface NextPlace {
   source_mix?: string
   public_data_match?: boolean
   merged_candidate_flag?: boolean
+  /** 일부 레거시/실험 응답에서만 제공 */
+  reviews?: PlaceReview[]
+  website?: string
+  google_maps?: string
 }
 
 /** /api/course 1순위 장소 블록 */
@@ -136,6 +151,8 @@ export interface PrimaryCoursePick {
   distance_from_prev_km?: number
   address?: string
   types?: string[]
+  /** 리뷰 키워드 기반 보조 점수(원문 없음) */
+  review_features?: Record<string, number | string>
 }
 
 /** /api/course — 다음 장면(신규 필드) */
@@ -176,6 +193,10 @@ export interface CourseControlBlock {
   decision_mode?: string
   next_scene_reason_mode?: string | null
   ml_model_used?: boolean
+  replace_step?: boolean
+  step_index?: number | null
+  step_role?: string | null
+  time_band?: string | null
   bias?: {
     family?: number
     scenic?: number
@@ -230,6 +251,11 @@ export interface CourseContinuationResponse {
     continuation_depth_hint?: string
     /** indoor_backup이 meal/cafe/indoor_visit으로 구체화된 경우 */
     indoor_transition_split?: boolean
+    time_band?: string
+    replace_step?: boolean
+    replace_step_index?: number | null
+    replace_step_role?: string | null
+    review_meta_applied?: boolean
   }
   /** 규칙 폴백 가능한 약지도 next_scene 분류기 메타 */
   ml_next_scene?: MlNextSceneMeta
@@ -243,6 +269,10 @@ export interface RecommendInputSummary {
   city: string
   adult_count?: string
   child_count?: string
+  current_time?: string
+  current_date?: string
+  user_location?: { lat: number; lng: number }
+  meal_preference?: string
 }
 
 export interface CourseBadge {
@@ -262,6 +292,8 @@ export interface CourseSummary {
   goal?: string
   weather_label?: string
   pitch?: string
+  /** 시간표 코스 안내(상단 배너 문구) */
+  schedule_intro?: string | null
 }
 
 /** /api/recommend 코스 후보 재정렬 메타(학습 번들 없으면 model_used=false) */
@@ -272,9 +304,25 @@ export interface CourseRerankMeta {
   fallback_reason?: string | null
 }
 
+/** 시간표형 일정(메인 코스) */
+export interface ItineraryEntry {
+  order: number
+  start_time: string
+  end_time: string
+  place_name: string
+  step_role?: string
+  step_label?: string
+  category: string
+  reason: string
+  travel_from_prev: string
+  meal_data_insufficient?: boolean
+}
+
 export interface CourseStep {
   order: number
   step_label: string
+  /** 서버 규칙 엔진 역할(main_spot | meal | cafe_rest | …). 소비자에게는 step_label로 표시 */
+  step_role?: string | null
   name: string
   one_line: string
   image?: string | null
@@ -297,12 +345,17 @@ export interface TopCourse {
   /** 코스 성격 태그(표시용) */
   reason_tags?: string[]
   steps: CourseStep[]
+  /** 시간표 뷰(있으면 기본 표시) */
+  itinerary?: ItineraryEntry[]
+  time_based_banner?: string
   hero_image?: string | null
   hero_name: string
   course_id?: string
   estimated_duration?: string
   movement_burden?: string
   weather_fit?: string
+  /** 예외 동선 시 디버그·투명성용 코드 */
+  course_shape_reason?: string | null
 }
 
 export interface AlternativeCourse {
@@ -356,5 +409,31 @@ export interface RecommendResponse {
   plan_a?: PlanBlock
   plan_b?: PlanBlock
   plan_c?: PlanBlock
-  meta?: { generated_at?: string; confidence_notes?: string[]; not_real_time_limitations?: string[] }
+  meta?: {
+    generated_at?: string
+    confidence_notes?: string[]
+    not_real_time_limitations?: string[]
+    /** 심야·새벽 등 운영 가능성 안내(휴리스틱) */
+    trip_feasibility_notice?: string | null
+    time_based_banner?: string
+    meal_data_insufficient?: boolean
+    pool_categories?: Record<string, number>
+    course_shape?: {
+      plan_a_reason?: string | null
+      plan_a_step_roles?: string[]
+      time_band?: string
+      /** 서버: night_late | dawn | morning | … */
+      time_band_detail?: string
+      trip_hour?: number
+      trip_minute?: number
+      meal_phase?: string
+    }
+  }
+  itinerary?: ItineraryEntry[]
+  meal_context?: {
+    phase?: string
+    basis_line?: string
+    clock_label?: string
+    requires_verified_meal_place?: boolean
+  }
 }
