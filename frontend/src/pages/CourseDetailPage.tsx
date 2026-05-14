@@ -10,6 +10,7 @@ import CourseStepDetailCards from '@/components/CourseStepDetailCards'
 import ServiceFooter from '@/components/ServiceFooter'
 import { Button } from '@/components/ui/button'
 import { altIdToCommittedKey, saveConfirmedCourse } from '@/lib/confirmedCourseStorage'
+import { saveRecommendPayloadForResult } from '@/lib/recommendSessionCache'
 
 function formatFcstTimeSlot(raw: string | null | undefined): string | null {
   if (!raw) return null
@@ -73,7 +74,10 @@ export default function CourseDetailPage() {
         <button
           type="button"
           className="mt-4 text-primary font-semibold"
-          onClick={() => navigate(`/result?${qs}`, { state: { data } })}
+          onClick={() => {
+            saveRecommendPayloadForResult(qs, data)
+            navigate(`/result?${qs}`)
+          }}
         >
           추천 화면으로
         </button>
@@ -105,7 +109,10 @@ export default function CourseDetailPage() {
       <div className="pt-[max(0.35rem,env(safe-area-inset-top))] pl-1 pr-3 h-[3.15rem] flex items-center justify-between border-b border-white/10">
         <button
           type="button"
-          onClick={() => navigate(`/result?${qs}`, { state: { data } })}
+          onClick={() => {
+            saveRecommendPayloadForResult(qs, data)
+            navigate(`/result?${qs}`)
+          }}
           className="inline-flex items-center gap-0.5 text-sm font-medium text-white/90 pl-1 py-2 pr-1"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -201,7 +208,10 @@ export default function CourseDetailPage() {
               type="button"
               variant="outline"
               className="w-full rounded-2xl bg-white font-semibold"
-              onClick={() => navigate(`/result/more?${qs}`, { state: { data } })}
+              onClick={() => {
+                saveRecommendPayloadForResult(qs, data)
+                navigate(`/result/more?${qs}`)
+              }}
             >
               다른 코스도 볼까요?
             </Button>

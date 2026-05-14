@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from lib.daytrip_planner import normalize_intent
+from lib.intent_normalize import normalize_intent
 from lib.main_scoring import compute_main_components, weighted_main_score, explain_main_destination, contribution_points
 from lib.next_course_scoring import rank_next_places
 from lib.scoring import calc_weather_score

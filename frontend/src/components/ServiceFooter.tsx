@@ -21,7 +21,7 @@ export default function ServiceFooter() {
       {open && (
         <ul className="text-[10px] text-muted-foreground mt-3 text-left list-disc pl-4 space-y-1 max-w-sm mx-auto">
           <li>정보는 예보·공개 데이터·큐레이션을 조합하며, 실시간·입장·주차·요금을 보장하지 않습니다.</li>
-          <li>코스는 거리·일정·의도에 맞춰 자동으로 제안하며, 반드시 현장·공식 공지로 확인하세요.</li>
+          <li>투어패스 관련 문구는 “활용 가능성” 수준이며, 할인·무료를 보장하지 않습니다.</li>
         </ul>
       )}
     </footer>

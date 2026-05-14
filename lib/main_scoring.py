@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from lib.course_flow import infer_venue_kind
 from lib.intent_hints import _COMPANION_HINTS, _GOAL_TAG_HINTS, _tags_lower
 
 
@@ -130,10 +131,14 @@ def compute_time_fit(
     intent: dict[str, str],
     scores: dict[str, Any],
     hour: int,
+    minute: int = 0,
 ) -> float:
     """시간대·일정 길이와의 정합 0~1."""
     dur = intent.get("duration", "half-day")
     g = intent["trip_goal"]
+    h = int(hour) % 24
+    mi = int(minute) % 60
+    tod = h * 60 + mi
 
     t = 0.62
     if g == "photo" and scores.get("is_golden_hour"):
@@ -152,8 +157,18 @@ def compute_time_fit(
     elif dur == "full-day":
         t += 0.14
 
-    if 10 <= hour <= 16 and g in ("walking", "healing"):
+    if 10 * 60 <= tod <= 16 * 60 + 59 and g in ("walking", "healing"):
         t += 0.06
+
+    vk = infer_venue_kind(dest)
+    if 11 * 60 + 30 <= tod <= 13 * 60 + 30 and vk == "meal":
+        t += 0.1
+    if 17 * 60 <= tod <= 19 * 60 + 30 and vk == "meal":
+        t += 0.1
+    if (tod >= 20 * 60 or tod < 6 * 60) and vk == "cafe":
+        t += 0.07
+    if (tod >= 20 * 60 or tod < 6 * 60) and (dest.get("category") or "") == "indoor":
+        t += 0.05
 
     return _clamp01(t)
 
@@ -190,11 +205,12 @@ def compute_main_components(
 ) -> dict[str, float]:
     """부분 점수 전부 0~1."""
     h = hour if hour is not None else int(weather.get("hour", datetime.now().hour))
+    mi = int(weather.get("minute", 0) or 0)
 
     wf = compute_raw_weather_match(dest, scores)
     gf = compute_goal_fit(dest, intent)
     df = _clamp01(float(distance_fit))
-    tf = compute_time_fit(dest, intent, scores, h)
+    tf = compute_time_fit(dest, intent, scores, h, minute=mi)
     se = compute_season_event_bonus(dest, scores, intent)
 
     return {

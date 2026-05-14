@@ -10,9 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import requests
-
-from lib.config import settings
+from lib.config import request_get, settings
 
 
 def _parse_float(val: Any) -> float | None:
@@ -86,7 +84,12 @@ def fetch_air_quality_sido(sido_name: str = "충남") -> dict | None:
         "ver": "1.0",
     }
     try:
-        r = requests.get(settings.air_ctprvn_url, params=params, timeout=12)
+        r = request_get(
+            settings.air_ctprvn_url,
+            params=params,
+            timeout=12,
+            verify=settings.requests_ssl_verify,
+        )
         r.raise_for_status()
         data = r.json()
     except Exception:

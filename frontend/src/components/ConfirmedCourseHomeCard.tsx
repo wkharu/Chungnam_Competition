@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { ConfirmedCourseState } from '@/lib/confirmedCourseStorage'
 import { clearConfirmedCourse } from '@/lib/confirmedCourseStorage'
-import { recommendPayloadWithCommittedAsTop } from '@/lib/recommendPayloadForCommitted'
+import { saveRecommendPayloadForResult } from '@/lib/recommendSessionCache'
 import { resolveTopCourseForDetail } from '@/lib/resolveTopCourse'
 import { Button } from '@/components/ui/button'
 import { MapPin } from 'lucide-react'
@@ -28,13 +28,8 @@ export default function ConfirmedCourseHomeCard({ confirmed }: Props) {
       ? `&altId=${encodeURIComponent(confirmed.committedCourseAltId)}`
       : ''
 
-  const payloadForFlow = recommendPayloadWithCommittedAsTop(
-    confirmed.recommendPayload,
-    confirmed.committedCourseAltId,
-  )
-
   return (
-    <section className="mb-5 rounded-2xl border border-emerald-200/80 bg-white shadow-sm overflow-hidden">
+    <section className="mb-5 rounded-[1.35rem] border border-emerald-200/75 bg-white overflow-hidden shadow-[0_12px_44px_-20px_rgba(5,150,105,0.22)] ring-1 ring-emerald-100/85">
       <div className="bg-gradient-to-r from-emerald-700 to-emerald-600 px-4 py-2.5">
         <p className="text-[11px] font-semibold text-emerald-50/95 uppercase tracking-wide">
           내가 고른 오늘의 코스
@@ -62,9 +57,10 @@ export default function ConfirmedCourseHomeCard({ confirmed }: Props) {
           <Button
             type="button"
             className="w-full rounded-xl font-semibold"
-            onClick={() =>
-              navigate(`/result/course?${qs}${altQ}`, { state: { data: confirmed.recommendPayload } })
-            }
+            onClick={() => {
+              saveRecommendPayloadForResult(qs, confirmed.recommendPayload)
+              navigate(`/result/course?${qs}${altQ}`)
+            }}
           >
             이 코스 이어서 보기
           </Button>
@@ -72,7 +68,14 @@ export default function ConfirmedCourseHomeCard({ confirmed }: Props) {
             type="button"
             variant="secondary"
             className="w-full rounded-xl font-semibold"
-            onClick={() => navigate(`/result/reconfigure?${qs}`, { state: { data: payloadForFlow } })}
+            onClick={() => {
+              saveRecommendPayloadForResult(qs, confirmed.recommendPayload)
+              navigate(`/result/edit?${qs}`, {
+                state: {
+                  committedSelectionAltId: confirmed.committedCourseAltId,
+                },
+              })
+            }}
           >
             코스 수정하기
           </Button>

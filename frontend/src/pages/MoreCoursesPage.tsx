@@ -1,168 +1,141 @@
-import { useEffect } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Clock, Cloud, MapPin } from 'lucide-react'
+import { useEffect, useMemo } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { ArrowLeft } from 'lucide-react'
 import { useRecommendFromRoute } from '@/hooks/useRecommendFromRoute'
 import { toResultQueryString } from '@/lib/tripParams'
-import type { RecommendResponse } from '@/types'
-import { APP_NAME } from '@/config/app'
-import ServiceFooter from '@/components/ServiceFooter'
+import type { AlternativeCourse } from '@/types'
+import { CONSUMER_APP_NAME } from '@/config/app'
 import { Button } from '@/components/ui/button'
-import { saveConfirmedCourse } from '@/lib/confirmedCourseStorage'
-
-function formatFcstTimeSlot(raw: string | null | undefined): string | null {
-  if (!raw) return null
-  const t = String(raw).replace(/\D/g, '')
-  if (t.length === 4) return `${t.slice(0, 2)}:${t.slice(2)}`
-  return raw
-}
+import { appImageSrc } from '@/lib/courseImageFallback'
+import {
+  MOCK_ALTERNATIVE_CONSUMER,
+  alternativeToConsumer,
+  mockConsumerAltToAlternative,
+  altCourseToTopCourse,
+  recommendWithTopCourse,
+} from '@/lib/mapRecommendToConsumerCourse'
+import type { ConsumerAlternativeCourse } from '@/lib/consumerCourseTypes'
+import { Badge } from '@/components/consumer/Badge'
+import { saveRecommendPayloadForResult } from '@/lib/recommendSessionCache'
 
 export default function MoreCoursesPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { form, data, loading, error } = useRecommendFromRoute()
   const qs = toResultQueryString(form)
+  const mockMode = searchParams.get('mock') === '1'
 
   useEffect(() => {
-    if (error) {
-      document.title = `${APP_NAME} · 오류`
-      return
-    }
-    if (loading && !data) {
-      document.title = `${APP_NAME} · 다른 코스`
-      return
-    }
-    if (data) {
-      document.title = `${APP_NAME} · 비교 코스`
-    }
-  }, [error, data, loading])
+    document.title = `${CONSUMER_APP_NAME} · 다른 코스`
+  }, [])
 
-  if (loading && !data) {
+  const rows = useMemo(() => {
+    const api = mockMode ? [] : (data?.alternative_courses ?? []).map(a => ({
+      kind: 'api' as const,
+      api: a,
+      card: alternativeToConsumer(a),
+    }))
+    const need = Math.max(0, 3 - api.length)
+    const mockExtras = MOCK_ALTERNATIVE_CONSUMER.filter(
+      m => !api.some(a => a.api.id === m.id),
+    ).slice(0, need)
+    const mockRows = mockExtras.map(m => ({ kind: 'mock' as const, mock: m, card: m }))
+    return [...api, ...mockRows]
+  }, [data, mockMode])
+
+  function applyAlt(alt: AlternativeCourse) {
+    if (!data) return
+    const next = recommendWithTopCourse(data, altCourseToTopCourse(alt))
+    saveRecommendPayloadForResult(qs, next)
+    navigate(`/result?${qs}`, { replace: true })
+  }
+
+  function onPick(row: (typeof rows)[number]) {
+    if (row.kind === 'api') {
+      applyAlt(row.api)
+      return
+    }
+    applyAlt(mockConsumerAltToAlternative(row.mock))
+  }
+
+  if (loading && !data && !mockMode) {
     return (
-      <div className="min-h-dvh flex flex-col bg-slate-900 text-slate-400 text-sm items-center justify-center px-6">
-        코스 목록을 불러오는 중…
+      <div className="consumer-shell items-center justify-center text-[#7b6a5c] font-medium">
+        불러오는 중…
       </div>
     )
   }
-  if (error) {
+  if ((error || !data) && !mockMode) {
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center px-6 text-destructive text-sm">
-        {error}
-        <Link to={`/?${qs}`} className="mt-4 text-foreground underline">
-          홈으로
-        </Link>
+      <div className="consumer-shell items-center justify-center px-6 text-[#3a2a20]">
+        <p className="text-sm font-medium text-center">{error || '코스를 불러올 수 없어요'}</p>
+        <Button type="button" className="mt-4 rounded-xl app-primary-button" onClick={() => navigate(`/result?${qs}`)}>
+          돌아가기
+        </Button>
       </div>
     )
-  }
-  if (!data) return null
-
-  const alts = data.alternative_courses ?? []
-  const timeStr = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
-  const fcstLabel = formatFcstTimeSlot(data.weather.fcst_time_slot)
-  const weatherLine = [
-    '단기예보',
-    fcstLabel && `기준 ${fcstLabel}`,
-    data.weather.sky_text,
-    `${data.weather.temp}°`,
-  ]
-    .filter(Boolean)
-    .join(' · ')
-
-  const goCourse = (altId: string, payload: RecommendResponse) => {
-    navigate(`/result/course?${qs}&altId=${encodeURIComponent(altId)}`, { state: { data: payload } })
   }
 
   return (
-    <div className="min-h-dvh flex flex-col bg-slate-950 text-white max-w-lg mx-auto w-full overflow-x-hidden">
-      <div className="pt-[max(0.35rem,env(safe-area-inset-top))] pl-1 pr-3 h-[3.15rem] flex items-center justify-between border-b border-white/10">
+    <div className="consumer-shell pb-8">
+      <header className="sticky top-0 z-30 border-b consumer-header-blur">
+        <div className="ios-statusbar">
+          <span>9:41</span>
+          <span className="text-[12px]">▴  Wi-Fi  ▰</span>
+        </div>
+        <div className="flex items-center gap-2 px-3 pb-3">
         <button
           type="button"
-          onClick={() => navigate(`/result?${qs}`, { state: { data } })}
-          className="inline-flex items-center gap-0.5 text-sm font-medium text-white/90 pl-1 py-2 pr-1"
+          onClick={() => navigate(-1)}
+          className="inline-flex h-11 w-11 items-center justify-center rounded-xl hover:bg-white/90 transition-colors"
         >
-          <ArrowLeft className="w-4 h-4" />
-          뒤로
+          <ArrowLeft className="w-5 h-5" />
         </button>
-        <span className="text-sm font-bold tracking-tight text-white/95">비교해 볼 만한 코스</span>
-        <span className="text-xs tabular-nums text-white/70 font-medium flex items-center gap-0.5">
-          <Clock className="w-3.5 h-3.5 opacity-80" />
-          {timeStr}
-        </span>
-      </div>
-      <div className="px-4 py-2.5 border-b border-white/5 bg-slate-900/80">
-        <p className="text-xs text-slate-300/95 leading-relaxed flex gap-1.5">
-          <Cloud className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sky-300/90" />
-          {weatherLine}
-        </p>
-      </div>
+        <h1 className="text-[17px] font-extrabold flex-1 text-center pr-10">다른 코스 보기</h1>
+        </div>
+      </header>
 
-      <div className="flex-1 bg-zinc-50 text-foreground rounded-t-2xl border-t border-white/10 px-4 pt-5 pb-8">
-        {alts.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center py-12">
-            지금은 비교할 다른 코스가 없어요.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {alts.map((alt) => {
-              const placeNames: string[] =
-                alt.place_names?.length > 0
-                  ? alt.place_names
-                  : (alt.steps?.map(s => s.name).filter(Boolean) ?? [])
-              return (
-              <div
-                key={alt.id}
-                className="w-full text-left rounded-2xl border border-border/40 bg-white p-4 shadow-sm"
-              >
-                <p className="text-sm font-bold text-foreground leading-snug">{alt.title}</p>
-                {alt.one_liner ? (
-                  <p className="text-xs text-foreground/75 mt-1.5 leading-relaxed">{alt.one_liner}</p>
-                ) : null}
-                <ul className="mt-2 space-y-1">
-                  {placeNames.map((n) => (
-                    <li
-                      key={n}
-                      className="text-xs text-foreground/90 flex items-start gap-1.5"
-                    >
-                      <MapPin className="w-3.5 h-3.5 shrink-0 mt-0.5 text-primary/80" />
-                      {n}
+      <div className="px-5 pt-4 space-y-4">
+        {rows.map(row => {
+          const c: ConsumerAlternativeCourse = row.card
+          const img = appImageSrc(c.heroImage)
+          return (
+            <article key={c.id} className="consumer-card-elevated overflow-hidden p-0">
+              <div className="relative aspect-[16/9] bg-[#f5ede2]">
+                <img src={img} alt="" className="w-full h-full object-cover" />
+                <span className="absolute left-3 top-3 rounded-full bg-[#fffaf2]/95 px-3 py-1 text-[12px] font-black text-[#9a4528]">
+                  {c.typeLabel}
+                </span>
+              </div>
+              <div className="p-4">
+                <h2 className="text-[19px] font-black mt-1 leading-snug text-[#2b1b12]">{c.title}</h2>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {c.badges.map(b => (
+                    <Badge key={b}>{b}</Badge>
+                  ))}
+                </div>
+                <ol className="mt-3 space-y-1.5 text-[14px] font-semibold text-[#5f5146]">
+                  {c.stepsPreview.map((s, i) => (
+                    <li key={i} className="flex gap-2">
+                      <span className="grid h-5 w-5 place-items-center rounded-full bg-[#fff0e9] text-[11px] font-black text-[#c56642]">{i + 1}</span>
+                      <span className="min-w-0">
+                        <span className="text-[#c56642] font-bold text-[12px]">{s.role}</span>{' '}
+                        {s.name}
+                      </span>
                     </li>
                   ))}
-                </ul>
-                <div className="flex flex-col gap-2 mt-3">
-                  <Button
-                    type="button"
-                    className="w-full rounded-xl font-semibold"
-                    onClick={() => {
-                      const ok = saveConfirmedCourse({
-                        resultQueryString: qs,
-                        committedCourseAltId: alt.id,
-                        recommendPayload: data,
-                      })
-                      if (!ok) {
-                        window.alert('선택을 저장하지 못했어요. 잠시 후 다시 시도해 주세요.')
-                        return
-                      }
-                      navigate(`/?${qs}`)
-                    }}
-                  >
-                    이 코스로 진행할게요
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full rounded-xl font-medium bg-white"
-                    onClick={() => goCourse(alt.id, data)}
-                  >
-                    코스 상세히 보기
-                  </Button>
-                </div>
+                </ol>
+                <Button
+                  type="button"
+                  className="w-full mt-4 h-12 rounded-xl font-extrabold app-primary-button border-0"
+                  onClick={() => onPick(row)}
+                >
+                  이 코스로 보기
+                </Button>
               </div>
-              )
-            })}
-          </div>
-        )}
-
-        <div className="mt-8">
-          <ServiceFooter />
-        </div>
+            </article>
+          )
+        })}
       </div>
     </div>
   )

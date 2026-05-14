@@ -114,7 +114,31 @@
 | `WEATHER_API_KEY` | 단기예보 대신 보수적 기본값·폴백 안내 |
 | `TOUR_API_KEY` | TourAPI 목록 비어 있을 수 있음, `data/destinations.json` 위주 |
 | `AIR_KOREA_API_KEY` 등 | 대기(PM) 연동 생략 |
-| `GOOGLE_PLACES_KEY` | Places 기반 다음 장소 후보가 비거나 제한적 |
+| `GOOGLE_PLACES_KEY` | Places·**리뷰** 연동 생략(다음 장소 후보 축소, 리뷰 기반 스코어 보조·코스 단계 리뷰 UI 비활성) |
+
+### Google Places 리뷰 활성화 체크리스트
+
+리뷰는 **키가 있고 장소가 식별 가능할 때**부터 바로 쓰입니다. 별도 “리뷰 전용 개발 단계”보다는 아래 조건 충족 여부를 보면 됩니다.
+
+1. **환경 변수**  
+   - `.env`에 **`GOOGLE_PLACES_KEY`** 설정(값은 Git에 올리지 않기).  
+   - 기본 엔드포인트는 `.env.example`의 **`GOOGLE_PLACES_V1_ROOT`** 등을 따릅니다. 커스텀 루트를 쓸 때만 해당 변수를 맞춥니다.
+
+2. **Google Cloud 콘솔**  
+   - 프로젝트에 **Maps Platform(Places API New 등)** 사용이 켜져 있고, **결제 계정**이 연결돼 있어야 합니다.  
+   - 키 제한(HTTP 리퍼러·IP)을 쓰는 경우, 로컬·배포 호스트에서 호출이 막히지 않는지 확인합니다.
+
+3. **장소 데이터(좌표)**  
+   - `GET /api/place-reviews` 및 코스 카드의 **`CourseStepGoogleReviews`**는 **위도·경도**가 있을 때 매칭이 안정적입니다. 좌표가 없으면 프론트에 “좌표 없어 리뷰를 불러올 수 없음”류 안내가 뜰 수 있습니다.
+
+4. **키가 없을 때 동작**  
+   - 백엔드: `lib/places.py`·`lib/review_features.py` 경로에서 리뷰 fetch·요약 보조를 **건너뜁니다**.  
+   - 앱 전체는 동작하지만, **리뷰 텍스트 기반 가중·요약 라인**은 비어 있거나 약해질 수 있습니다.
+
+5. **기대치·운영**  
+   - Places 상세에서 내려주는 **리뷰 본문은 소수(대략 상위 몇 개)**이며, 전체 리뷰 DB를 가져오는 API가 아닙니다.  
+   - 서버에는 **짧은 TTL 인메모리 캐시**(`lib/places.py`)가 있어 반복 호출을 줄입니다. 저장·재배포 정책은 [Google Maps Platform 이용약관](https://developers.google.com/maps/terms)을 따릅니다.  
+   - 호출당 과금이 있으므로, 배포 후 **쿼ota·비용 알림**을 콘솔에서 설정하는 것을 권장합니다.
 
 에어코리아 키 대체 시도 등 세부는 `lib/config.py`를 보세요.
 

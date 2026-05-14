@@ -11,9 +11,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-import requests
-
-from lib.config import settings
+from lib.config import request_get, settings
 
 # 충남 지역코드
 AREA_CODE = 34  # 충청남도
@@ -71,7 +69,7 @@ def fetch_attractions(city: str = "아산", content_type: str = "관광지", num
     }
 
     url = f"{settings.tour_base_url}/areaBasedList2"
-    response = requests.get(url, params=params, timeout=10)
+    response = request_get(url, params=params, timeout=settings.tour_api_timeout_seconds, verify=settings.requests_ssl_verify)
     response.raise_for_status()
     data = response.json()
 
@@ -115,7 +113,7 @@ def fetch_detail(content_id: str) -> dict:
     }
 
     url = f"{settings.tour_base_url}/detailCommon1"
-    response = requests.get(url, params=params, timeout=10)
+    response = request_get(url, params=params, timeout=settings.tour_api_timeout_seconds, verify=settings.requests_ssl_verify)
     response.raise_for_status()
     data = response.json()
 

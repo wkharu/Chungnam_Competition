@@ -46,7 +46,10 @@
   body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
-    font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', system-ui, sans-serif;
+    font-family: 'Geist Variable', 'Apple SD Gothic Neo', 'Noto Sans KR', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
 }
 
@@ -117,7 +120,7 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
+  --radius: 1rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -160,4 +163,64 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer utilities {
+  /** 소비자 앱 공통 배경 — 앱 표면처럼 읽히는 차분한 캔버스 */
+  .bg-app-mesh {
+    background:
+      linear-gradient(180deg, #fbf4e9 0%, #fffaf2 42%, #f8f1e7 100%);
+  }
+
+  .text-balance-safe {
+    text-wrap: balance;
+  }
+
+  /** 모바일 퍼스트 한 화면 폭 */
+  .consumer-shell {
+    @apply min-h-dvh flex flex-col max-w-lg mx-auto w-full text-[#2b1b12] antialiased;
+    background:
+      linear-gradient(180deg, #fbf4e9 0%, #fffaf2 42%, #f8f1e7 100%);
+  }
+
+  .consumer-header-blur {
+    @apply bg-[#fffaf2]/88 backdrop-blur-2xl border-[#eadfce] shadow-[0_1px_0_rgba(80,48,28,0.07)];
+  }
+
+  .consumer-dock {
+    @apply bg-[#fffaf2]/92 backdrop-blur-2xl border-[#eadfce] shadow-[0_-14px_48px_-20px_rgba(80,48,28,0.2)];
+  }
+
+  .consumer-card-elevated {
+    @apply rounded-2xl border border-[#eadfce] bg-[#fffdf8] shadow-[0_12px_34px_-24px_rgba(80,48,28,0.35)];
+  }
+
+  .app-hero-band {
+    @apply text-[#2b1b12];
+    background: transparent;
+  }
+
+  .app-primary-button {
+    @apply bg-[#f28c6b] text-white shadow-[0_14px_28px_-18px_rgba(196,86,50,0.8)] hover:bg-[#ec7d5a];
+  }
+
+  .app-chip-selected {
+    @apply border-[#f19a7b] bg-[#fff0e9] text-[#9a4528] shadow-[0_8px_18px_-16px_rgba(196,86,50,0.65)];
+  }
+
+  .app-chip-idle {
+    @apply border-[#eadfce] bg-[#fffdf8] text-[#5f5146] hover:border-[#e3c8b4] hover:bg-white;
+  }
+
+  .ios-statusbar {
+    @apply flex h-8 items-center justify-between px-4 text-[13px] font-semibold text-[#2b1b12];
+  }
+
+  .travel-field {
+    @apply flex h-12 w-full items-center justify-between rounded-xl border border-[#eadfce] bg-[#fffdf8] px-3 text-[15px] font-semibold text-[#3a2a20];
+  }
+
+  .soft-pill {
+    @apply inline-flex items-center gap-1 rounded-full bg-[#f5ede2] px-2.5 py-1 text-[11px] font-bold text-[#6f6257];
+  }
 }

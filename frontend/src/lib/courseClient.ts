@@ -1,4 +1,5 @@
 import type { CourseContinuationResponse, Weather } from '@/types'
+import { readFetchErrorMessage } from '@/lib/apiErrorMessage'
 import type { TripDuration } from '@/hooks/useRecommend'
 
 /** useCourse / 결과 페이지 공통: /api/course 요청 URL */
@@ -24,6 +25,15 @@ export interface CourseFetchContext {
   transport?: string
   adult_count?: string
   child_count?: string
+  /** 재구성 UX: 수정 대상 식별(서버 로깅·분석·향후 분기용) */
+  reconfigureTarget?: string
+  selectedCourseType?: string
+  courseIdForEdit?: string
+  /** 단계 교체 모드 */
+  replaceStep?: boolean
+  stepIndex?: number
+  stepRole?: string
+  timeBand?: string
 }
 
 export function buildCourseUrl(
@@ -64,6 +74,13 @@ export function buildCourseUrl(
   if (ctx?.indoorBias != null && ctx.indoorBias > 0) p.set('indoor_bias', String(ctx.indoorBias))
   if (ctx?.mealBias != null && ctx.mealBias > 0) p.set('meal_bias', String(ctx.mealBias))
   if (ctx?.cafeBias != null && ctx.cafeBias > 0) p.set('cafe_bias', String(ctx.cafeBias))
+  if (ctx?.reconfigureTarget) p.set('reconfigure_target', ctx.reconfigureTarget)
+  if (ctx?.selectedCourseType) p.set('selected_course_type', ctx.selectedCourseType)
+  if (ctx?.courseIdForEdit) p.set('course_id', ctx.courseIdForEdit)
+  if (ctx?.replaceStep) p.set('replace_step', 'true')
+  if (ctx?.stepIndex != null) p.set('step_index', String(ctx.stepIndex))
+  if (ctx?.stepRole) p.set('step_role', ctx.stepRole)
+  if (ctx?.timeBand) p.set('time_band', ctx.timeBand)
   return `/api/course?${p.toString()}`
 }
 
@@ -75,6 +92,8 @@ export async function fetchCoursePayload(
   ctx?: CourseFetchContext,
 ): Promise<CourseContinuationResponse> {
   const res = await window.fetch(buildCourseUrl(lat, lng, category, hour, ctx))
-  const data = (await res.json()) as CourseContinuationResponse
-  return data
+  if (!res.ok) {
+    throw new Error(await readFetchErrorMessage(res, `코스 API 오류 (${res.status})`))
+  }
+  return (await res.json()) as CourseContinuationResponse
 }

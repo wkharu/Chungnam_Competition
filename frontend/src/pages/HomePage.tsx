@@ -1,33 +1,48 @@
-import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
-import AppOnboardingForm from '@/components/AppOnboardingForm'
-import ConfirmedCourseHomeCard from '@/components/ConfirmedCourseHomeCard'
-import ServiceFooter from '@/components/ServiceFooter'
+import { useState, useEffect, useRef } from 'react'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { loadConfirmedCourse } from '@/lib/confirmedCourseStorage'
-import { Button } from '@/components/ui/button'
-import { toRecommendQuery, toResultQueryString, tripFormFromSearchParams } from '@/lib/tripParams'
+import type { ConfirmedCourseState } from '@/lib/confirmedCourseStorage'
+import ConfirmedCourseHomeCard from '@/components/ConfirmedCourseHomeCard'
+import { appendStoredUserGeo, toRecommendQuery, toResultQueryString, tripFormFromSearchParams } from '@/lib/tripParams'
 import type { TripFormState } from '@/lib/tripParams'
-import type { RecommendResponse } from '@/types'
-import { Loader2 } from 'lucide-react'
-import { APP_NAME, APP_TAGLINE } from '@/config/app'
+import type { RecommendResponse, Weather } from '@/types'
+import type { TripDuration } from '@/hooks/useRecommend'
+import { Bell, BriefcaseBusiness, CloudSun, Loader2, MapPin, Minus, Plus, UsersRound } from 'lucide-react'
+import { CONSUMER_APP_NAME } from '@/config/app'
+import { readFetchErrorMessage } from '@/lib/apiErrorMessage'
+import { InputCard } from '@/components/consumer/InputCard'
+import { TourPassToggle } from '@/components/consumer/TourPassToggle'
+import { BottomCTA } from '@/components/consumer/BottomCTA'
+import { saveRecommendPayloadForResult } from '@/lib/recommendSessionCache'
+import { writeStoredUserGeo } from '@/lib/userGeoStorage'
+
+const CITIES = [
+  '천안', '아산', '공주', '보령', '논산', '부여', '당진', '태안', '홍성',
+  '금산', '서산', '서천', '예산', '청양', '전체',
+] as const
 
 export default function HomePage() {
   const [searchParams] = useSearchParams()
+  const spKey = searchParams.toString()
   const [form, setForm] = useState<TripFormState>(() => tripFormFromSearchParams(searchParams))
   const [pending, setPending] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [confirmedSnapshot, setConfirmedSnapshot] = useState(() => loadConfirmedCourse())
+  const [confirmed, setConfirmed] = useState<ConfirmedCourseState | null>(() => loadConfirmedCourse())
+  const [weatherSnap, setWeatherSnap] = useState<Weather | null>(null)
   const navigate = useNavigate()
+  const urlSynced = useRef(false)
 
   useEffect(() => {
     setForm(tripFormFromSearchParams(searchParams))
-  }, [searchParams])
-
-  useEffect(() => {
-    const onConfirmed = () => setConfirmedSnapshot(loadConfirmedCourse())
-    window.addEventListener('chungnam-confirmed-course-changed', onConfirmed)
-    return () => window.removeEventListener('chungnam-confirmed-course-changed', onConfirmed)
-  }, [])
+    urlSynced.current = true
+  }, [spKey])
 
   useEffect(() => {
     const c = loadConfirmedCourse()
@@ -37,74 +52,334 @@ export default function HomePage() {
   }, [searchParams, navigate])
 
   useEffect(() => {
-    document.title = `${APP_NAME} · 조건 선택`
+    document.title = `${CONSUMER_APP_NAME}`
   }, [])
 
-  async function onCta() {
+  useEffect(() => {
+    const sync = () => setConfirmed(loadConfirmedCourse())
+    window.addEventListener('chungnam-confirmed-course-changed', sync)
+    return () => window.removeEventListener('chungnam-confirmed-course-changed', sync)
+  }, [])
+
+  useEffect(() => {
+    if (!navigator.geolocation) return
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        writeStoredUserGeo(pos.coords.latitude, pos.coords.longitude)
+      },
+      () => {},
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 120000 },
+    )
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadSnap() {
+      try {
+        const q = new URLSearchParams({
+          city: form.city === '전체' ? '아산' : form.city,
+          current_time: form.currentTime,
+          current_date: form.currentDate,
+        })
+        appendStoredUserGeo(q)
+        const res = await window.fetch(`/api/weather-snapshot?${q}`)
+        if (!res.ok) return
+        const body = (await res.json()) as { weather: Weather }
+        if (!cancelled) setWeatherSnap(body.weather)
+      } catch {
+        if (!cancelled) setWeatherSnap(null)
+      }
+    }
+    void loadSnap()
+    const onGeo = () => void loadSnap()
+    window.addEventListener('chungnam-user-geo-changed', onGeo)
+    return () => {
+      cancelled = true
+      window.removeEventListener('chungnam-user-geo-changed', onGeo)
+    }
+  }, [form.city, form.currentTime, form.currentDate, spKey])
+
+  const patch = (p: Partial<TripFormState>) => setForm(f => ({ ...f, ...p }))
+
+  function chipClass(on: boolean) {
+    return `min-h-[2.75rem] rounded-xl px-4 text-[14px] font-extrabold border transition active:scale-[0.98] ${
+      on ? 'app-chip-selected' : 'app-chip-idle'
+    }`
+  }
+
+  async function onSubmit() {
     setErr(null)
     setPending(true)
     try {
       const q = toRecommendQuery(form)
       const res = await window.fetch(`/api/recommend?${q}`)
-      if (!res.ok) throw new Error(`서버 오류 (${res.status})`)
+      if (!res.ok) {
+        throw new Error(await readFetchErrorMessage(res, `잠시 후 다시 시도해 주세요`))
+      }
       const data = (await res.json()) as RecommendResponse
       const back = toResultQueryString(form)
-      navigate(`/result?${back}`, { state: { data } as { data: RecommendResponse } })
+      saveRecommendPayloadForResult(back, data)
+      navigate(`/result?${back}`, { state: { data } })
     } catch (e) {
-      setErr(e instanceof Error ? e.message : '알 수 없는 오류')
+      setErr(e instanceof Error ? e.message : '잠시 후 다시 시도해 주세요')
     } finally {
       setPending(false)
     }
   }
 
+  const solo = form.companion === 'solo'
+
+  const snapLine = weatherSnap
+    ? [
+        weatherSnap.sky_text?.trim() || null,
+        typeof weatherSnap.temp === 'number' && !Number.isNaN(weatherSnap.temp)
+          ? `${Math.round(weatherSnap.temp)}°`
+          : null,
+        typeof weatherSnap.precip_prob === 'number' && !Number.isNaN(weatherSnap.precip_prob)
+          ? `강수 확률 ${Math.round(weatherSnap.precip_prob)}%`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : ''
+
   return (
-    <div className="min-h-dvh flex flex-col bg-gradient-to-b from-slate-950 via-slate-900 to-slate-900">
-      {/* 1면 상단: 프로젝트(서비스) 제목 — 추천/날씨는 여기에 없음 */}
-      <div className="pt-[max(1.25rem,env(safe-area-inset-top))] px-4 pb-4 text-center text-white">
-        <div
-          className="mx-auto mb-3 h-12 w-12 rounded-2xl bg-white/10 ring-1 ring-white/20 flex items-center justify-center text-lg font-black tracking-tight"
-          aria-hidden
-        >
-          CN
+    <div className="consumer-shell pb-28">
+      <header className="app-hero-band px-5 pt-[max(0.55rem,env(safe-area-inset-top))] pb-4">
+        <div className="ios-statusbar -mx-1">
+          <span>9:41</span>
+          <span className="text-[12px]">▴  Wi-Fi  ▰</span>
         </div>
-        <h1 className="text-[1.65rem] font-extrabold tracking-tight leading-tight">{APP_NAME}</h1>
-        <p className="text-sm text-slate-300/90 mt-1.5 leading-relaxed px-1">{APP_TAGLINE}</p>
-        <p className="text-[11px] text-slate-500 mt-2">아래를 선택한 뒤 맨 아래에서 제출하세요</p>
-      </div>
-
-      <div className="flex-1 min-h-0 flex flex-col rounded-t-[1.5rem] bg-zinc-100 shadow-[0_-8px_32px_rgba(0,0,0,0.35)]">
-        <main className="flex-1 w-full max-w-lg mx-auto px-4 pt-4 pb-32">
-          {confirmedSnapshot ? <ConfirmedCourseHomeCard confirmed={confirmedSnapshot} /> : null}
-          <AppOnboardingForm value={form} onChange={setForm} />
-          {err && (
-            <p className="text-sm text-destructive mt-3 text-center" role="alert">
-              {err}
-            </p>
-          )}
-          <ServiceFooter />
-        </main>
-      </div>
-
-      <div className="fixed bottom-0 left-0 right-0 z-30 p-3 bg-gradient-to-t from-zinc-100 via-zinc-100/98 to-zinc-100/0 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-        <div className="max-w-lg mx-auto">
-          <Button
-            type="button"
-            size="lg"
-            className="w-full rounded-2xl text-base font-bold shadow-lg h-12 bg-slate-900 text-white hover:bg-slate-800"
-            onClick={onCta}
-            disabled={pending}
-          >
-            {pending ? (
-              <span className="inline-flex items-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                코스를 준비해요…
-              </span>
-            ) : (
-              '이 조건으로 코스 추천받기'
-            )}
-          </Button>
+        <div className="mt-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-[#fff0e9] text-[#b45b37] ring-1 ring-[#f1d1bf]">
+              <BriefcaseBusiness className="h-5 w-5" />
+            </span>
+            <h1 className="text-[26px] font-black tracking-tight text-balance-safe">
+              여행 코스 추천
+            </h1>
+          </div>
+          <button type="button" className="relative grid h-10 w-10 place-items-center rounded-full bg-[#fffdf8] border border-[#eadfce]">
+            <Bell className="h-5 w-5" />
+            <span className="absolute right-2.5 top-2 h-2 w-2 rounded-full bg-[#f28c6b]" />
+          </button>
         </div>
-      </div>
+        <p className="text-[14px] text-[#7b6a5c] font-medium mt-2 leading-snug">
+          당신의 취향에 딱 맞는 충남 여행을 제안해드려요.
+        </p>
+        {weatherSnap ? (
+          <div className="mt-4 rounded-2xl border border-[#eadfce] bg-[#fffdf8] px-4 py-3 shadow-[0_10px_28px_-24px_rgba(80,48,28,0.45)]">
+            <div className="flex items-center gap-3">
+              <CloudSun className="h-12 w-12 text-[#f0a33b]" strokeWidth={1.5} />
+              <div className="min-w-0 flex-1">
+                <p className="text-[15px] font-black text-[#2b1b12] leading-snug">{form.city === '전체' ? '아산' : form.city} · {snapLine || '요약 없음'}</p>
+                <p className="text-[12px] text-[#7b6a5c] mt-0.5">야외 활동하기 좋은 날씨예요.</p>
+              </div>
+            </div>
+            {weatherSnap.forecast_anchor_reason === 'gps_nearest' && weatherSnap.forecast_anchor_city ? (
+              <p className="text-[11px] text-[#7b6a5c] font-semibold mt-2">
+                내 위치에 가까운 격자{' '}
+                <span className="font-extrabold">{weatherSnap.forecast_anchor_city}</span>
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </header>
+
+      <main className="flex-1 px-5 pt-1 space-y-5 overflow-y-auto">
+        {confirmed ? <ConfirmedCourseHomeCard confirmed={confirmed} /> : null}
+        <InputCard title="여행 지역">
+          <Select value={form.city} onValueChange={v => patch({ city: v ?? '전체' })}>
+            <SelectTrigger className="travel-field">
+              <MapPin className="mr-2 h-4 w-4 text-[#8b5f40]" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CITIES.map(c => (
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </InputCard>
+
+        <InputCard title="여행 일정">
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                ['2h', '2시간'],
+                ['half-day', '반나절'],
+                ['full-day', '하루'],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={v}
+                type="button"
+                className={chipClass(form.tripDuration === v)}
+                onClick={() =>
+                  patch({
+                    tripDuration: v as TripDuration,
+                    durationFullKind: '1d',
+                  })
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </InputCard>
+
+        <InputCard title="동행 유형">
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                ['solo', '혼자'],
+                ['couple', '연인'],
+                ['family', '가족'],
+                ['friends', '친구'],
+                ['family_kids', '아이 동반'],
+              ] as const
+            ).map(([k, label]) => {
+              const selected =
+                k === 'family_kids'
+                  ? form.companion === 'family' && form.childCount !== '0'
+                  : form.companion === k
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  className={chipClass(selected)}
+                  onClick={() => {
+                    if (k === 'family_kids') {
+                      patch({ companion: 'family', childCount: '1' })
+                    } else {
+                      patch({
+                        companion: k,
+                        adultCount: k === 'solo' ? '1' : form.adultCount,
+                        childCount: k === 'solo' ? '0' : k === 'family' ? form.childCount : form.childCount,
+                      })
+                    }
+                  }}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+        </InputCard>
+
+        <InputCard title="여행 목적 / 테마">
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                ['healing', '자연 힐링'],
+                ['photo', '사진'],
+                ['culture', '축제'],
+                ['food', '맛집'],
+                ['indoor', '실내'],
+                ['walking', '가볍게 산책'],
+              ] as const
+            ).map(([k, label]) => {
+              const foodOn = form.mealPreference === '한식'
+              const on =
+                k === 'food'
+                  ? foodOn
+                  : k === 'healing'
+                    ? form.tripGoal === 'healing' && !foodOn
+                    : form.tripGoal === k
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  className={chipClass(on)}
+                  onClick={() => {
+                    if (k === 'food') {
+                      patch({ tripGoal: 'healing', mealPreference: '한식' })
+                    } else {
+                      patch({ tripGoal: k, mealPreference: 'none' })
+                    }
+                  }}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+        </InputCard>
+
+        <InputCard title="이동 수단">
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                ['car', '렌터카'],
+                ['public', '대중교통'],
+                ['walk', '도보 위주'],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={v}
+                type="button"
+                className={chipClass(form.transport === v)}
+                onClick={() => patch({ transport: v })}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </InputCard>
+
+        {!solo ? (
+          <InputCard title="인원">
+            <div className="travel-field">
+              <button type="button" className="grid h-8 w-8 place-items-center rounded-lg border border-[#eadfce] bg-white" onClick={() => patch({ adultCount: String(Math.max(1, Number(form.adultCount || 1) - 1)) })}>
+                <Minus className="h-4 w-4" />
+              </button>
+              <div className="flex items-center gap-2">
+                <UsersRound className="h-4 w-4 text-[#8b5f40]" />
+                <span>{form.adultCount}명</span>
+              </div>
+              <button type="button" className="grid h-8 w-8 place-items-center rounded-lg border border-[#eadfce] bg-white" onClick={() => patch({ adultCount: String(Math.min(10, Number(form.adultCount || 1) + 1)) })}>
+                <Plus className="h-4 w-4" />
+              </button>
+            </div>
+          </InputCard>
+        ) : null}
+
+        <TourPassToggle enabled={form.tourpassMode} onChange={v => patch({ tourpassMode: v })} />
+
+        {err ? (
+          <p className="text-sm text-destructive text-center font-medium" role="alert">
+            {err}
+          </p>
+        ) : null}
+
+        <p className="text-center pb-2">
+          <Link to="/admin/pass-quest-mock" className="text-[12px] font-medium text-stone-400 underline">
+            운영
+          </Link>
+        </p>
+      </main>
+
+      <BottomCTA
+        disabled={pending}
+        onClick={e => {
+          e.preventDefault()
+          void onSubmit()
+        }}
+      >
+        {pending ? (
+          <span className="inline-flex flex-col items-center justify-center gap-1">
+            <span className="inline-flex items-center justify-center gap-2">
+              <Loader2 className="w-5 h-5 animate-spin" />
+              불러오는 중…
+            </span>
+            <span className="text-[11px] font-medium text-white/85">첫 요청은 30초~1분 걸릴 수 있어요</span>
+          </span>
+        ) : (
+          '오늘 코스 추천받기'
+        )}
+      </BottomCTA>
     </div>
   )
 }

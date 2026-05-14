@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any, Literal
 
 from lib.distance import haversine
-from lib.daytrip_planner import normalize_intent
+from lib.course_flow import time_band_for_hour
+from lib.intent_normalize import normalize_intent
 from lib.meal_style import (
     compute_cuisine_bonus,
     compute_meal_style_fit,
@@ -27,6 +29,7 @@ from lib.recommend_ui import approximate_drive_minutes
 
 _ROOT = Path(__file__).resolve().parent.parent
 DESTINATIONS_PATH = _ROOT / "data" / "destinations.json"
+_log = logging.getLogger(__name__)
 OVERRIDES_PATH = _ROOT / "data" / "next_course_overrides.json"
 
 StageType = Literal[
@@ -1183,6 +1186,18 @@ def explain_primary(
     return a, b[:3], c
 
 
+def _step_role_to_continuation_stage(step_role: str) -> StageType:
+    """코스 단계 교체: UI step_role → Places 검색·점수 단계."""
+    r = (step_role or "").strip().lower()
+    if r == "meal":
+        return "meal"
+    if r in ("cafe_rest", "finish"):
+        return "cafe_rest"
+    if r == "indoor_visit":
+        return "indoor_visit"
+    return "short_walk"
+
+
 def build_course_payload(
     *,
     lat: float,
@@ -1208,6 +1223,10 @@ def build_course_payload(
     indoor_bias: float = 0.0,
     meal_bias: float = 0.0,
     cafe_bias: float = 0.0,
+    replace_step: bool = False,
+    replace_step_index: int | None = None,
+    replace_step_role: str | None = None,
+    time_band: str | None = None,
 ) -> dict[str, Any]:
     """
     fetch_places_fn: (lat, lng, types, radius_m) -> tuple[list[dict], float, bool, str | None]
@@ -1245,9 +1264,16 @@ def build_course_payload(
             "need_meal": min(float(trip_state.get("need_meal", 0.5)), 0.07),
             "need_rest": max(float(trip_state.get("need_rest", 0.28)), 0.82),
         }
-    stage_ai, title_ai, why_ai = decide_next_stage(
-        spot_meta, trip_state, hour, intent_use, scores, precip_prob, dust
-    )
+    replace_step_mode = bool(replace_step) and bool((replace_step_role or "").strip())
+    if replace_step_mode:
+        sr0 = (replace_step_role or "").strip().lower()
+        stage_ai = _step_role_to_continuation_stage(sr0)
+        title_ai = _stage_title(stage_ai, hour)
+        why_ai = _stage_why_for_forced(stage_ai, spot_meta, hour, intent_use)[:4]
+    else:
+        stage_ai, title_ai, why_ai = decide_next_stage(
+            spot_meta, trip_state, hour, intent_use, scores, precip_prob, dust
+        )
     stage: StageType = stage_ai
     stage_title = title_ai
     stage_why = why_ai
@@ -1301,6 +1327,7 @@ def build_course_payload(
         and not anchor_is_restaurant
         and use_ml_next_scene_assist
         and not user_stage_from_hint
+        and not replace_step_mode
     ):
         try:
             from app.ml.next_scene_predictor import try_model_stage_override
@@ -1330,13 +1357,15 @@ def build_course_payload(
                     stage_title = _stage_title(stage, hour)
                     stage_why = build_stage_why_lines(stage, spot_meta, hour, intent_use)
         except Exception:
-            pass
+            _log.exception("next_scene ML assist failed (import, bundle, or predict)")
 
     if use_ml_next_scene_assist:
         if user_stage_from_hint:
             ml_next_scene["fallback_reason"] = "user_hint_takes_priority"
         elif ml_next_scene.get("model_used"):
             ml_next_scene["fallback_reason"] = None
+        elif replace_step_mode:
+            ml_next_scene["fallback_reason"] = "replace_step_skips_ml"
         elif path_norm != "ai":
             ml_next_scene["fallback_reason"] = "guided_flow"
         elif anchor_is_restaurant:
@@ -1504,6 +1533,25 @@ def build_course_payload(
         )
     ranked.sort(key=lambda x: x.get("next_course_score", 0), reverse=True)
 
+    review_meta_applied = False
+    if replace_step_mode:
+        from lib.review_features import rerank_with_review_text_signals
+
+        ranked, review_meta_applied = rerank_with_review_text_signals(
+            ranked,
+            intent_use,
+            lat,
+            lng,
+            hour=hour,
+            meal_bias=meal_bias,
+            cafe_bias=cafe_bias,
+            family_bias=family_bias,
+            scenic_bias=scenic_bias,
+            indoor_bias=indoor_bias,
+        )
+
+    tb_resolved = (time_band or "").strip() or time_band_for_hour(hour)
+
     sid = str(spot_id).strip() if spot_id else ""
     if sid:
         ranked = [p for p in ranked if str(p.get("place_id") or "").strip() != sid]
@@ -1541,6 +1589,11 @@ def build_course_payload(
         "trip_state": trip_state,
         "spot_meta_used": bool(spot_meta.get("id") or spot_meta.get("role_tags")),
         "fallback_note": fallback_note,
+        "time_band": tb_resolved,
+        "replace_step": replace_step_mode,
+        "replace_step_index": replace_step_index if replace_step_mode else None,
+        "replace_step_role": (replace_step_role or "").strip() or None if replace_step_mode else None,
+        "review_meta_applied": review_meta_applied,
         "duration": dur_flow,
         "continuation_depth_hint": {
             "2h": "다음 한 단계만 강하게 제안",
@@ -1625,6 +1678,10 @@ def build_course_payload(
                 after_labels,
                 dur_flow,
             )
+        sig = primary.get("review_signal_lines")
+        if isinstance(sig, list) and sig:
+            b = list(b) + [str(s) for s in sig if str(s).strip()][:3]
+            b = b[:6]
         primary["why_next_stage"] = a_stage
         primary["why_this_place"] = b
         primary["after_this"] = c
@@ -1663,6 +1720,11 @@ def build_course_payload(
             "address": primary.get("address"),
             "types": primary.get("types"),
         }
+        rf = primary.get("review_features")
+        if isinstance(rf, dict) and rf:
+            pr_block["review_features"] = {
+                k: v for k, v in rf.items() if k != "review_sample_count"
+            }
         out["primary_recommendation"] = pr_block
         out["primary_restaurant"] = pr_block
         out["primary_place"] = {
@@ -1672,9 +1734,13 @@ def build_course_payload(
         }
 
     decision_mode = (
-        "user_explicit"
-        if user_stage_from_hint
-        else ("model_assisted" if ml_next_scene.get("model_used") else "rule_time_heuristic")
+        "replace_step"
+        if replace_step_mode
+        else (
+            "user_explicit"
+            if user_stage_from_hint
+            else ("model_assisted" if ml_next_scene.get("model_used") else "rule_time_heuristic")
+        )
     )
     out["course_control"] = {
         "applied_user_hint": hint_raw or None,
@@ -1684,6 +1750,10 @@ def build_course_payload(
         "decision_mode": decision_mode,
         "next_scene_reason_mode": ml_next_scene.get("next_scene_reason_mode"),
         "ml_model_used": bool(ml_next_scene.get("model_used")),
+        "replace_step": replace_step_mode,
+        "step_index": replace_step_index if replace_step_mode else None,
+        "step_role": (replace_step_role or "").strip() or None if replace_step_mode else None,
+        "time_band": tb_resolved,
         "bias": {
             "family": family_bias,
             "scenic": scenic_bias,

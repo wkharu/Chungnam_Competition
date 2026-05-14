@@ -11,7 +11,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from lib.course_units import indoor_outdoor_balance  # noqa: E402
-from lib.daytrip_planner import build_daytrip_payload, normalize_intent  # noqa: E402
+from lib.daytrip_planner import build_daytrip_payload  # noqa: E402
+from lib.intent_normalize import normalize_intent  # noqa: E402
 from lib.distance import haversine  # noqa: E402
 from lib.recommend import match_from_api  # noqa: E402
 

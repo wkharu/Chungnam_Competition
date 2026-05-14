@@ -12,9 +12,7 @@ import sys
 import time
 from typing import Any
 
-import requests
-
-from lib.config import settings
+from lib.config import request_get, settings
 from lib.distance import haversine
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
@@ -184,8 +182,28 @@ def fetch_citytour_restaurant_candidates(
         params.setdefault("radius", int(radius_km * 1000))
 
     out: list[dict[str, Any]] = []
+
+    # Fast DNS pre-check: skip entirely if hostname unreachable (saves 30-60s)
     try:
-        r = requests.get(url, params=params, timeout=14)
+        from urllib.parse import urlparse
+        import socket
+        parsed_host = urlparse(url).hostname or ""
+        if parsed_host:
+            socket.setdefaulttimeout(2.0)
+            try:
+                socket.getaddrinfo(parsed_host, None)
+            except (socket.gaierror, OSError):
+                if settings.debug:
+                    print(f"[citytour] DNS lookup failed for {parsed_host} — skipping", file=sys.stderr)
+                _CACHE[ck] = (now, [])
+                return []
+            finally:
+                socket.setdefaulttimeout(None)
+    except Exception:
+        pass
+
+    try:
+        r = request_get(url, params=params, timeout=(3, 5), verify=settings.requests_ssl_verify)
         if not r.ok:
             if settings.debug:
                 print(f"[citytour] HTTP {r.status_code}", file=sys.stderr)

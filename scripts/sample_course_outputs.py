@@ -18,7 +18,7 @@ from lib.course_continuation import (  # noqa: E402
     decide_next_stage,
     resolve_spot_metadata,
 )
-from lib.daytrip_planner import normalize_intent  # noqa: E402
+from lib.intent_normalize import normalize_intent  # noqa: E402
 from lib.scoring import calc_weather_score  # noqa: E402
 
 

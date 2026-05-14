@@ -5,77 +5,119 @@
 from __future__ import annotations
 
 import math
+import os
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any
 
 from lib.distance import haversine
 from lib.intent_hints import _COMPANION_HINTS, _GOAL_TAG_HINTS, _tags_lower
 from lib.recommend_ui import build_ui_fields_for_destination
 from lib.course_view import build_consumer_course_view
+from lib.course_flow import build_outing_plan_places, infer_venue_kind, time_band_for_hour
+from lib.itinerary_builder import build_itinerary_for_course, trip_start_datetime
+from lib.meal_context import build_meal_context, step_roles_for_meal_context
+from lib.places import fetch_continuation_candidates
+from lib.venue_hours_policy import trip_context_consumer_note, trip_detail_band
 
-Companion = Literal["solo", "couple", "family", "friends"]
-TripGoal = Literal["healing", "photo", "walking", "indoor", "culture", "kids"]
-Duration = Literal["2h", "half-day", "full-day"]
-Transport = Literal["car", "public"]
 
-
-def normalize_intent(
-    companion: str | None,
-    trip_goal: str | None,
-    duration: str | None,
-    transport: str | None,
-    *,
-    adult_count: int | None = None,
-    child_count: int | None = None,
-) -> dict[str, str]:
-    """쿼리/본문 값을 허용 집합으로 보정 (기본값 포함).
-
-    adult_count / child_count가 None이면 동행·목적에 맞춰 보수적 기본값을 쓴다.
-    홈페이지 규칙 엔진 전용(/api/recommend). next_scene(/api/course)와 무관.
-    """
-    c = (companion or "solo").lower().strip()
-    g = (trip_goal or "healing").lower().strip()
-    d = (duration or "half-day").lower().strip()
-    t = (transport or "car").lower().strip()
-
-    if c not in ("solo", "couple", "family", "friends"):
-        c = "solo"
-    if g not in ("healing", "photo", "walking", "indoor", "culture", "kids"):
-        g = "healing"
-    if d not in ("2h", "half-day", "full-day"):
-        d = "half-day"
-    if t not in ("car", "public"):
-        t = "car"
-
-    if adult_count is None:
-        if c == "couple":
-            adults = 2
-        elif c == "friends":
-            adults = 3
-        elif c == "family":
-            adults = 2
-        else:
-            adults = 1
-    else:
-        adults = max(1, min(10, int(adult_count)))
-
-    if child_count is None:
-        children = 0
-        if c == "family":
-            children = 1
-        if g == "kids":
-            children = max(children, 1)
-    else:
-        children = max(0, min(8, int(child_count)))
-
+def _google_meal_row_to_dest(row: dict[str, Any]) -> dict[str, Any]:
+    types = [str(x).lower() for x in (row.get("types") or [])]
+    is_cafe = any("cafe" in t or "coffee" in t for t in types)
+    tags = ["카페", "디저트", "커피"] if is_cafe else ["맛집", "식사", "한식"]
+    try:
+        r_show = float(row.get("rating") or 0.0)
+    except (TypeError, ValueError):
+        r_show = 0.0
+    try:
+        rev_n = int(row.get("review_count") or 0)
+    except (TypeError, ValueError):
+        rev_n = 0
     return {
-        "companion": c,
-        "trip_goal": g,
-        "duration": d,
-        "transport": t,
-        "adult_count": str(adults),
-        "child_count": str(children),
+        "id": str(row.get("place_id") or ""),
+        "name": row["name"],
+        "city": "",
+        "category": "indoor",
+        "tags": tags,
+        "score": 0.52,
+        "weather_score": 0.5,
+        "coords": {"lat": float(row["lat"]), "lng": float(row["lng"])},
+        "address": str(row.get("address") or ""),
+        "image": str(row.get("photo_url") or ""),
+        "copy": "주변 식음료 검색으로 연결한 후보예요. 영업 시간은 방문 전 확인해 주세요.",
+        "source": "google_places_itinerary",
+        "rating": r_show,
+        "review_count": rev_n,
+        "weather_weights": {"sunny": 0.5, "rainy": 0.75, "fine_dust_limit": "bad"},
+        "golden_hour_bonus": False,
+        "temp_range": {"min": -20, "max": 40},
     }
+
+
+def _pool_category_counts(pool: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"tourist": 0, "restaurant": 0, "cafe": 0, "indoor": 0}
+    for p in pool:
+        vk = infer_venue_kind(p)
+        cat = str(p.get("category") or "")
+        if vk == "meal":
+            counts["restaurant"] += 1
+        elif vk == "cafe":
+            counts["cafe"] += 1
+        elif cat == "indoor":
+            counts["indoor"] += 1
+        else:
+            counts["tourist"] += 1
+    return counts
+
+
+def inject_meal_places_for_plan(
+    plan_raw: list[dict[str, Any]],
+    roles: list[str],
+    *,
+    anchor_lat: float,
+    anchor_lng: float,
+    meal_ctx: Any,
+) -> tuple[list[dict[str, Any]], bool]:
+    """식사 슬롯을 Places/공공 데이터로 채운다. 없으면 자리 표시자만 두고 플래그."""
+    from lib.course_flow import meal_placeholder_dict
+
+    out: list[dict[str, Any]] = [dict(p) for p in plan_raw]
+    any_insufficient = False
+    verify = bool(
+        meal_ctx is not None and getattr(meal_ctx, "requires_verified_meal_place", False)
+    )
+
+    for i, role in enumerate(roles):
+        if role != "meal" or i >= len(out):
+            continue
+        pl = out[i]
+        nm = str(pl.get("name") or "").strip()
+        vk = infer_venue_kind(pl) if nm else None
+        need_fetch = False
+        if verify:
+            need_fetch = (not nm) or bool(pl.get("meal_data_insufficient")) or vk != "meal"
+        else:
+            need_fetch = bool(pl.get("meal_data_insufficient"))
+
+        if not need_fetch:
+            continue
+
+        lat, lng = anchor_lat, anchor_lng
+        if i > 0 and out[i - 1].get("coords"):
+            lat = float(out[i - 1]["coords"].get("lat") or lat)
+            lng = float(out[i - 1]["coords"].get("lng") or lng)
+
+        rows, _, _, _ = fetch_continuation_candidates(
+            lat,
+            lng,
+            ["restaurant", "korean_restaurant", "chinese_restaurant", "meal_takeaway"],
+            max_results=10,
+        )
+        if rows:
+            out[i] = _google_meal_row_to_dest(rows[0])
+        else:
+            out[i] = meal_placeholder_dict(lat, lng)
+            any_insufficient = True
+    return out, any_insufficient
 
 
 def intent_score_multiplier(dest: dict[str, Any], intent: dict[str, str]) -> float:
@@ -498,13 +540,21 @@ def build_daytrip_payload(
     weather: dict[str, Any],
     match_result: dict[str, Any],
     intent: dict[str, str],
+    trip_context: dict[str, Any] | None = None,
+    pass_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     match_from_api 결과 + 날씨 원본 + 사용자 의도 → Plan A/B 및 메타.
     """
+    trip_context = trip_context or {}
+    pass_context = pass_context or {}
     scores = match_result["weather"]
-    user_lat = match_result["user_coords"]["lat"]
-    user_lng = match_result["user_coords"]["lng"]
+    user_lat = float(match_result["user_coords"]["lat"])
+    user_lng = float(match_result["user_coords"]["lng"])
+    if trip_context.get("user_lat") is not None:
+        user_lat = float(trip_context["user_lat"])
+    if trip_context.get("user_lng") is not None:
+        user_lng = float(trip_context["user_lng"])
     raw_recs = match_result["recommendations"]
 
     adjusted = with_adjusted_scores(raw_recs, intent)
@@ -513,6 +563,20 @@ def build_daytrip_payload(
     n = min(n, len(pool)) if pool else 0
 
     pp = float(weather.get("precip_prob", 0) or 0)
+    trip_hour = int(weather.get("hour") if weather.get("hour") is not None else datetime.now().hour)
+    trip_minute = int(weather.get("minute", 0) or 0)
+    date_iso = (
+        str(trip_context.get("current_date_iso") or weather.get("current_date_iso") or "")
+        .strip()
+        or None
+    )
+    meal_pref = str(
+        trip_context.get("meal_preference") or intent.get("meal_preference") or "none"
+    )
+    mc = build_meal_context(trip_hour, trip_minute)
+    roles_ov = step_roles_for_meal_context(mc, intent["duration"])
+    use_meal_driven = roles_ov is not None
+    meal_strict = mc.requires_verified_meal_place
     # 48% 이상이면 메인 코스를 실내 후보 풀에서 먼저 구성(50~60% ‘실내·혼합 우선’에 맞춤)
     rainy_main = pp >= 48.0
 
@@ -524,23 +588,38 @@ def build_daytrip_payload(
 
     names_a: set[str] = set()
     plan_a_raw: list[dict[str, Any]] = []
+    plan_a_shape_reason: str | None = None
+    plan_a_roles: list[str] = []
+    meal_insufficient = False
     if n > 0:
-        plan_a_raw = build_plan_places(
+        plan_a_raw, plan_a_roles, plan_a_shape_reason = build_outing_plan_places(
             pool_for_a,
-            n,
-            user_lat,
-            user_lng,
-            set(),
-            prefer_indoor=rainy_main,
-            indoor_category_only=rainy_main,
+            intent=intent,
+            weather=weather,
+            user_lat=user_lat,
+            user_lng=user_lng,
+            exclude_names=set(),
+            hour=trip_hour,
+            roles_override=roles_ov,
+            skip_template_exceptions=use_meal_driven,
+            meal_substitution_mode="strict" if meal_strict else "default",
         )
+        if plan_a_raw:
+            plan_a_raw, meal_insufficient = inject_meal_places_for_plan(
+                plan_a_raw,
+                plan_a_roles,
+                anchor_lat=user_lat,
+                anchor_lng=user_lng,
+                meal_ctx=mc,
+            )
         names_a = {p["name"] for p in plan_a_raw}
-        # 희귀 케이스: 플래너가 비었는데 후보는 있을 때 랭킹 상위로 코스 구성
         if not plan_a_raw and raw_recs:
             take = min(n, len(raw_recs))
             plan_a_raw = nearest_neighbor_order(raw_recs[:take], user_lat, user_lng)[
                 :take
             ]
+            plan_a_roles = ["main_spot"] + ["secondary_spot"] * (len(plan_a_raw) - 1)
+            plan_a_shape_reason = plan_a_shape_reason or "fallback_ranking_only"
             names_a = {p["name"] for p in plan_a_raw}
 
     env_tr = environment_triggers(weather, scores)
@@ -548,28 +627,64 @@ def build_daytrip_payload(
     if oh:
         env_tr = env_tr + [oh]
 
-    plan_b_raw = build_plan_places(
-        pool, n, user_lat, user_lng, names_a, prefer_indoor=not rainy_main
+    plan_b_raw, plan_b_roles, _plan_b_shape = build_outing_plan_places(
+        pool,
+        intent=intent,
+        weather=weather,
+        user_lat=user_lat,
+        user_lng=user_lng,
+        exclude_names=set(names_a),
+        hour=trip_hour,
     )
     if not plan_b_raw and pool:
-        # 실내 후보가 부족하면 Plan A와 겹치지 않게 뒤쪽 순위로 채움
         fallback = [p for p in pool if p["name"] not in names_a][:n]
         plan_b_raw = nearest_neighbor_order(fallback, user_lat, user_lng)
+        plan_b_roles = ["main_spot"] + ["secondary_spot"] * (len(plan_b_raw) - 1)
     if not plan_b_raw and raw_recs and names_a:
         alt = [p for p in raw_recs if p["name"] not in names_a][: max(n, 2)]
         if alt:
             plan_b_raw = nearest_neighbor_order(alt, user_lat, user_lng)[:n]
+            plan_b_roles = ["main_spot"] + ["secondary_spot"] * (len(plan_b_raw) - 1)
 
     names_ab = set(names_a) | {p["name"] for p in plan_b_raw}
+
+    # Diversity guard: reject plan_b if ≥50% of places overlap with plan_a
+    if plan_b_raw and names_a:
+        b_names = {p["name"] for p in plan_b_raw}
+        overlap = b_names & names_a
+        if len(overlap) >= max(1, len(b_names) * 0.5):
+            # Try deeper in the pool for truly different places
+            deeper = [p for p in adjusted if p["name"] not in names_a][:n * 2]
+            if len(deeper) >= n:
+                plan_b_raw = nearest_neighbor_order(deeper[:n], user_lat, user_lng)
+                plan_b_roles = ["main_spot"] + ["secondary_spot"] * (len(plan_b_raw) - 1)
+            else:
+                plan_b_raw = []
+                plan_b_roles = []
+        names_ab = set(names_a) | {p["name"] for p in plan_b_raw}
+
     plan_c_raw: list[dict[str, Any]] = []
+    plan_c_roles: list[str] = []
     if len(pool) > len(names_ab):
-        plan_c_raw = build_plan_places(
-            pool, n, user_lat, user_lng, names_ab, prefer_indoor=False
+        plan_c_raw, plan_c_roles, _ = build_outing_plan_places(
+            pool,
+            intent=intent,
+            weather=weather,
+            user_lat=user_lat,
+            user_lng=user_lng,
+            exclude_names=set(names_ab),
+            hour=trip_hour,
         )
     if plan_c_raw:
         set_c = frozenset(p["name"] for p in plan_c_raw)
         set_b = frozenset(p["name"] for p in plan_b_raw) if plan_b_raw else frozenset()
-        if set_c == frozenset(names_a) or (plan_b_raw and set_c == set_b):
+        # Reject plan_c if exact match OR ≥50% overlap with plan_a or plan_b
+        overlap_a = set_c & frozenset(names_a)
+        overlap_b = set_c & set_b
+        if (set_c == frozenset(names_a)
+                or (plan_b_raw and set_c == set_b)
+                or len(overlap_a) >= max(1, len(set_c) * 0.5)
+                or (plan_b_raw and len(overlap_b) >= max(1, len(set_c) * 0.5))):
             plan_c_raw = []
 
     def avg_score(ps: list[dict[str, Any]]) -> float:
@@ -581,7 +696,22 @@ def build_daytrip_payload(
     plan_b_places = [serialize_place(p, weather, scores, intent) for p in plan_b_raw]
     plan_c_places = [serialize_place(p, weather, scores, intent) for p in plan_c_raw]
 
+    def _attach_roles(places: list[dict[str, Any]], roles: list[str]) -> None:
+        for i, pl in enumerate(places):
+            if i < len(roles):
+                pl["step_role"] = roles[i]
+
+    _attach_roles(plan_a_places, plan_a_roles)
+    _attach_roles(plan_b_places, plan_b_roles)
+    _attach_roles(plan_c_places, plan_c_roles)
+
     sky_map = {1: "맑음", 3: "구름많음", 4: "흐림"}
+    cur_date_disp = date_iso or ""
+    if not cur_date_disp and weather.get("base_date"):
+        bd = str(weather["base_date"])
+        if len(bd) == 8:
+            cur_date_disp = f"{bd[:4]}-{bd[4:6]}-{bd[6:8]}"
+
     weather_summary = {
         "temp": weather["temp"],
         "precip_prob": weather["precip_prob"],
@@ -591,6 +721,7 @@ def build_daytrip_payload(
         "base_date": weather.get("base_date"),
         "base_time": weather.get("base_time"),
         "hour": weather.get("hour"),
+        "minute": trip_minute,
     }
 
     input_summary = {
@@ -601,7 +732,26 @@ def build_daytrip_payload(
         "adult_count": intent.get("adult_count", "1"),
         "child_count": intent.get("child_count", "0"),
         "city": match_result["city"],
+        "current_time": f"{trip_hour:02d}:{trip_minute:02d}",
+        "current_date": cur_date_disp,
+        "user_location": {"lat": user_lat, "lng": user_lng},
+        "meal_preference": meal_pref,
     }
+    _pc = pass_context
+    if _pc:
+        from lib.pass_quest import pass_context_active
+
+        input_summary["tourpass_mode"] = pass_context_active(_pc)
+        input_summary["tourpass_ticket_type"] = str(
+            _pc.get("tourpass_ticket_type") or "none"
+        )
+        input_summary["benefit_priority"] = str(_pc.get("benefit_priority") or "none")
+        pg = str(_pc.get("pass_goal") or "").strip()
+        if pg:
+            input_summary["pass_goal"] = pg
+        input_summary["purchased_status"] = str(
+            _pc.get("purchased_status") or "not_planned"
+        )
 
     plan_a_checks = checks_for_plan(plan_a_raw, intent, weather, scores, "A")
     plan_b_checks = checks_for_plan(plan_b_raw, intent, weather, scores, "B")
@@ -610,6 +760,8 @@ def build_daytrip_payload(
     b_indoor = all(_is_indoor_heavy_candidate(p) for p in plan_b_raw) if plan_b_raw else False
 
     generated_at = datetime.now(timezone.utc).isoformat()
+    _trip_band_detail = trip_detail_band(trip_hour)
+    _trip_notice = trip_context_consumer_note(_trip_band_detail)
     _rank_scores = [float(x.get("score", 0.0)) for x in raw_recs]
 
     _enriched = [
@@ -630,6 +782,22 @@ def build_daytrip_payload(
             _enriched[0], weather, scores, intent
         )
         today_pitch, today_pitch_src = generate_today_course_pitch(_struct)
+
+    top_itinerary: list[dict[str, Any]] = []
+    if plan_a_raw and plan_a_roles:
+        top_itinerary = build_itinerary_for_course(
+            plan_a_raw,
+            plan_a_roles,
+            start_local=trip_start_datetime(date_iso, trip_hour, trip_minute),
+            duration_key=intent["duration"],
+            transport=intent["transport"],
+            meal_ctx=mc,
+            meal_preference=meal_pref,
+            time_basis_line=mc.basis_line,
+        )
+
+    time_banner = "현재 시간 기반으로 구성된 코스입니다"
+    pool_cat = _pool_category_counts(pool)
 
     out: dict[str, Any] = {
         "input_summary": input_summary,
@@ -665,6 +833,26 @@ def build_daytrip_payload(
             "generated_at": generated_at,
             "confidence_notes": [],
             "not_real_time_limitations": [],
+            "trip_feasibility_notice": _trip_notice,
+            "time_based_banner": time_banner,
+            "meal_data_insufficient": meal_insufficient,
+            "pool_categories": pool_cat,
+            "course_shape": {
+                "plan_a_reason": plan_a_shape_reason,
+                "plan_a_step_roles": list(plan_a_roles),
+                "time_band": time_band_for_hour(trip_hour),
+                "time_band_detail": _trip_band_detail,
+                "trip_hour": trip_hour,
+                "trip_minute": trip_minute,
+                "meal_phase": mc.phase,
+            },
+        },
+        "itinerary": top_itinerary,
+        "meal_context": {
+            "phase": mc.phase,
+            "basis_line": mc.basis_line,
+            "clock_label": mc.clock_label,
+            "requires_verified_meal_place": mc.requires_verified_meal_place,
         },
         "city": match_result["city"],
         "weather": {
@@ -673,10 +861,43 @@ def build_daytrip_payload(
             "sky": weather["sky"],
             "sky_text": weather_summary["sky_text"],
             "dust": weather["dust"],
+            "hour": trip_hour,
+            "minute": trip_minute,
+            "current_date_iso": date_iso,
         },
         "scores": scores,
         "total_fetched": match_result["total_fetched"],
         "recommendations": _enriched,
+        "main_scoring_model": match_result.get("main_scoring_model") or {},
     }
     out.update(build_consumer_course_view(out))
+    from lib.pass_quest import attach_pass_quest_to_payload
+
+    # Google Places 동기 호출이 많으면 SSL·재시도로 /api/recommend 가 타임아웃될 수 있어 기본은 끔.
+    # 필요 시 SYNC_ENRICH_COURSE_STEPS_MAX=3~6 (로컬·네트워크 여유 있을 때만)
+    try:
+        sync_steps_max = max(0, min(8, int(os.getenv("SYNC_ENRICH_COURSE_STEPS_MAX", "0"))))
+    except ValueError:
+        sync_steps_max = 0
+    if sync_steps_max > 0:
+        try:
+            from lib.review_features import enrich_consumer_course_steps_google_meta
+
+            enrich_consumer_course_steps_google_meta(
+                out,
+                intent,
+                hour=trip_hour,
+                ref_lat=user_lat,
+                ref_lng=user_lng,
+                max_fetch=sync_steps_max,
+            )
+        except Exception as e:
+            import sys
+
+            from lib.config import settings
+
+            if settings.debug:
+                print(f"[daytrip] SYNC_ENRICH_COURSE_STEPS_MAX 보강 실패: {e}", file=sys.stderr)
+
+    attach_pass_quest_to_payload(out, pass_context or {}, intent=intent, weather=weather)
     return out

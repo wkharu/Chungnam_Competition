@@ -11,9 +11,61 @@ import re
 from typing import Any
 
 from lib.course_rerank import apply_course_rerank
+from lib.course_flow import consumer_label_for_role, flow_pitch_reasons
 from lib.course_units import movement_burden_label, weather_fit_label
 
 _SKY = {1: "맑음", 3: "구름 많음", 4: "흐림"}
+
+_DEFAULT_COURSE_HERO = "/hero-course-placeholder.svg"
+
+# destinations 자동태그·리뷰 특성 키 등 영문 snake_case → 카드용 한글
+_TAG_LABEL_KO: dict[str, str] = {
+    # 동행·유형
+    "family_friendly": "가족 동행",
+    "kids_friendly": "아이와 함께",
+    "kids": "키즈",
+    "couple": "연인",
+    "solo": "혼자",
+    "friends": "친구",
+    # 경험
+    "photo_friendly": "사진·포토",
+    "healing": "힐링",
+    "quiet": "조용함",
+    "crowded": "붐빌 수 있음",
+    "nature": "자연",
+    "history": "역사",
+    "culture": "문화",
+    "festival": "축제",
+    "experience": "체험",
+    "leisure": "레저",
+    "sports": "스포츠",
+    "shopping": "쇼핑",
+    # 식음·카페
+    "quick_meal": "빠른 식사",
+    "dessert_good": "디저트",
+    "cafe": "카페",
+    "food": "맛집",
+    "korean_food": "한식",
+    # 시간·체류
+    "long_stay_ok": "여유 있게",
+    "short_visit_ok": "짧게 들르기",
+    "golden_hour": "노을·골든아워",
+    # 날씨·환경
+    "rainy_day_ok": "우천에도 무난",
+    "indoor": "실내",
+    "outdoor": "야외",
+    # 편의
+    "parking_easy": "주차 편함",
+    "view_good": "전망·뷰",
+    "walking": "걷기",
+    "drive": "드라이브",
+    "scenic": "경치",
+    # 리뷰 기반 신호
+    "trending": "요즘 인기",
+    "high_rated": "평점 높음",
+    "low_rated": "평점 낮음",
+    "recently_reviewed": "최근 리뷰 있음",
+}
 
 
 def _ko_duration(d: str) -> str:
@@ -88,6 +140,19 @@ def _shorten(s: str, n: int = 72) -> str:
     return s[: n - 1] + "…"
 
 
+def _safe_image_src(value: Any) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return _DEFAULT_COURSE_HERO
+    if "places.googleapis.com" in s and "/media" in s:
+        m = re.search(r"/v1/(places/[^?]+?)/media", s)
+        if m:
+            from urllib.parse import quote
+
+            return f"/api/place-photo?name={quote(m.group(1), safe='')}&maxHeightPx=720"
+    return s
+
+
 def _intro_paragraph(rec: dict[str, Any], cap: int = 900) -> str:
     """소개 문단(스토어 리뷰 아님 — 큐레이션·요약 필드)."""
     for key in (
@@ -135,12 +200,42 @@ def _merge_detail_bullets(rec: dict[str, Any], max_n: int = 8) -> list[str]:
 def _tag_labels(rec: dict[str, Any], max_n: int = 8) -> list[str]:
     t = rec.get("enriched_tags") or rec.get("tags") or []
     if isinstance(t, list):
-        return [str(x).strip() for x in t if str(x).strip()][:max_n]
+        out: list[str] = []
+        for x in t:
+            s = str(x).strip()
+            if not s:
+                continue
+            out.append(_TAG_LABEL_KO.get(s, s))
+            if len(out) >= max_n:
+                break
+        return out
     return []
 
 
 def _place_name_set(places: list[dict[str, Any]]) -> frozenset[str]:
     return frozenset(str(p.get("name") or "") for p in places if p.get("name"))
+
+
+def _step_lat_lng(pl: dict[str, Any], merged: dict[str, Any]) -> tuple[float | None, float | None]:
+    """추천·플랜 병합 행에서 좌표 추출(Google 리뷰 search 용)."""
+    for src in (merged, pl):
+        c = src.get("coords")
+        if isinstance(c, dict):
+            try:
+                la = float(c.get("lat"))
+                ln = float(c.get("lng"))
+                if abs(la) > 1e-6 and abs(ln) > 1e-6:
+                    return la, ln
+            except (TypeError, ValueError):
+                pass
+        try:
+            la = float(src.get("lat"))
+            ln = float(src.get("lng"))
+            if abs(la) > 1e-6 and abs(ln) > 1e-6:
+                return la, ln
+        except (TypeError, ValueError):
+            pass
+    return None, None
 
 
 def _build_steps_for_places(
@@ -165,11 +260,19 @@ def _build_steps_for_places(
             ),
             88,
         )
-        if not one_line:
+        if pl.get("meal_data_insufficient"):
+            one_line = "식사 장소 데이터가 부족해요. 지도 앱에서 주변 식당을 검색해 주세요."
+        elif not one_line:
             one_line = f"{_ko_goal(str(inp.get('trip_goal', 'healing')))}에 어울리는 곳이에요."
         intro = _intro_paragraph(merged)
         d_bullets = _merge_detail_bullets(merged)
         tags = _tag_labels(merged)
+        img_src = _safe_image_src(
+            pl.get("image")
+            or rec_row.get("image")
+            or merged.get("image")
+            or ""
+        )
         try:
             r_raw = merged.get("rating")
             rating_f = float(r_raw) if r_raw is not None else 0.0
@@ -179,21 +282,31 @@ def _build_steps_for_places(
             rev_n = int(merged.get("review_count") or 0)
         except (TypeError, ValueError):
             rev_n = 0
-        steps.append(
-            {
+        role = str(pl.get("step_role") or "").strip()
+        step_label = (
+            consumer_label_for_role(role)
+            if role
+            else (labels[i] if i < len(labels) else f"{i + 1}번")
+        )
+        la_v, ln_v = _step_lat_lng(pl, merged)
+        step_row: dict[str, Any] = {
                 "order": i + 1,
-                "step_label": labels[i] if i < len(labels) else f"{i + 1}번",
+                "step_label": step_label,
+                "step_role": role or None,
                 "name": pl.get("name", ""),
                 "one_line": one_line,
-                "image": pl.get("image") if i == 0 else pl.get("image"),
+                "image": img_src or None,
                 "address": pl.get("address", ""),
                 "detail_intro": intro,
                 "detail_bullets": d_bullets,
                 "tag_labels": tags,
                 "rating": round(rating_f, 2) if rating_f > 0 else None,
                 "review_count": rev_n,
-            }
-        )
+        }
+        if la_v is not None and ln_v is not None:
+            step_row["lat"] = la_v
+            step_row["lng"] = ln_v
+        steps.append(step_row)
     return steps
 
 
@@ -212,11 +325,21 @@ def _build_full_course_unit(
     reasons_title: str,
     reasons_override: list[str] | None,
     reason_tags: list[str],
+    course_shape_reason: str | None = None,
 ) -> dict[str, Any]:
     if not places:
         return {}
     first_name = str(places[0].get("name") or "")
     first_e = next((r for r in recs if r.get("name") == first_name), recs[0] if recs else {})
+    hero_img = _safe_image_src(places[0].get("image") or first_e.get("image") or "")
+    if not hero_img:
+        for p in places:
+            im = _safe_image_src(p.get("image"))
+            if im and im != _DEFAULT_COURSE_HERO:
+                hero_img = im
+                break
+    if not hero_img:
+        hero_img = _DEFAULT_COURSE_HERO
     reasons = (
         reasons_override
         if reasons_override is not None
@@ -237,13 +360,14 @@ def _build_full_course_unit(
         "reasons": reasons,
         "reason_tags": reason_tags,
         "steps": steps,
-        "hero_image": places[0].get("image"),
+        "hero_image": hero_img,
         "hero_name": str(places[0].get("name") or ""),
         "estimated_duration": _ko_duration(str(inp.get("duration", "half-day"))),
         "movement_burden": movement_burden_label(places, user_lat, user_lng),
         "weather_fit": weather_fit_label(weather, scores),
         "place_names": plc_names,
         "one_liner": _one_liner_from_pitch(pitch_f),
+        "course_shape_reason": course_shape_reason,
     }
 
 
@@ -265,7 +389,7 @@ def _single_stop_course(
         "place_identity_summary": place_row.get("place_identity_summary"),
         "decision_conclusion": place_row.get("decision_conclusion"),
         "lead_place_sentence": place_row.get("lead_place_sentence"),
-        "image": place_row.get("image"),
+        "image": _safe_image_src(place_row.get("image")),
         "address": place_row.get("address", ""),
         "category": place_row.get("category"),
         "coords": place_row.get("coords"),
@@ -328,7 +452,7 @@ def build_consumer_course_view(payload: dict[str, Any]) -> dict[str, Any]:
                 "place_identity_summary": p0.get("place_identity_summary"),
                 "decision_conclusion": p0.get("decision_conclusion"),
                 "lead_place_sentence": p0.get("lead_place_sentence"),
-                "image": p0.get("image"),
+                "image": _safe_image_src(p0.get("image")),
                 "address": p0.get("address", ""),
                 "category": p0.get("category"),
                 "coords": p0.get("coords"),
@@ -353,7 +477,22 @@ def build_consumer_course_view(payload: dict[str, Any]) -> dict[str, Any]:
         "transport": str(inp.get("transport", "car")),
         "adult_count": str(inp.get("adult_count", "1")),
         "child_count": str(inp.get("child_count", "0")),
+        "meal_preference": str(inp.get("meal_preference", "none")),
     }
+
+    cs_meta = (payload.get("meta") or {}).get("course_shape") or {}
+    plan_a_reason = cs_meta.get("plan_a_reason")
+    roles_from_meta: list[str] = list(cs_meta.get("plan_a_step_roles") or [])
+    if not roles_from_meta and places_a:
+        roles_from_meta = [
+            str(p.get("step_role") or "main_spot") for p in places_a
+        ]
+    flow_headline, flow_bullets = flow_pitch_reasons(
+        str(inp.get("duration", "half-day")),
+        roles_from_meta,
+        plan_a_reason,
+        trip_band_detail=str(cs_meta.get("time_band_detail") or "") or None,
+    )
 
     candidates: list[dict[str, Any]] = []
 
@@ -368,13 +507,14 @@ def build_consumer_course_view(payload: dict[str, Any]) -> dict[str, Any]:
         user_lat=ulat,
         user_lng=ulng,
         pitch=pitch if pitch else one,
-        reasons_title="이런 이유로 추천했어요",
-        reasons_override=None,
+        reasons_title="이 코스 동선을 추천한 이유",
+        reasons_override=flow_bullets,
         reason_tags=[
+            "보고 · 먹고 · 쉬는 흐름",
+            f"일정·{_ko_duration(str(inp.get('duration', 'half-day')))}",
             f"목적·{_ko_goal(intent['trip_goal'])}",
-            "오늘 날씨·동선 반영",
-            "당일 코스 단위 추천",
         ],
+        course_shape_reason=plan_a_reason,
     )
     if main_unit:
         candidates.append(main_unit)
@@ -481,6 +621,22 @@ def build_consumer_course_view(payload: dict[str, Any]) -> dict[str, Any]:
     top_course = ranked[0] if ranked else {}
     alternative_courses = ranked[1:][:3]
 
+    itinerary = list(payload.get("itinerary") or [])
+    meal_ctx_payload = payload.get("meal_context") or {}
+    basis = str(meal_ctx_payload.get("basis_line") or "").strip()
+    meta_all = payload.get("meta") or {}
+    time_banner = str(meta_all.get("time_based_banner") or "").strip()
+
+    if top_course:
+        if itinerary:
+            top_course["itinerary"] = itinerary
+        if time_banner:
+            top_course["time_based_banner"] = time_banner
+        if basis:
+            rcur = list(top_course.get("reasons") or [])
+            if not any(basis[:16] in str(x) for x in rcur):
+                top_course["reasons"] = [basis] + rcur[:4]
+
     pp_w = float(weather.get("precip_prob", 0) or 0)
     if pp_w >= 60:
         headline_w = "비 가능성을 고려한 추천 코스"
@@ -495,6 +651,9 @@ def build_consumer_course_view(payload: dict[str, Any]) -> dict[str, Any]:
         headline_w = "오늘의 추천 코스"
         one_w = one
 
+    if flow_headline and pp_w < 50:
+        one_w = flow_headline
+
     summary: dict[str, Any] = {
         "headline": headline_w,
         "one_liner": one_w,
@@ -505,6 +664,7 @@ def build_consumer_course_view(payload: dict[str, Any]) -> dict[str, Any]:
         "goal": _ko_goal(str(inp.get("trip_goal", "healing"))),
         "weather_label": w_line,
         "pitch": pitch[:800] if pitch else one,
+        "schedule_intro": time_banner or None,
     }
 
     notice: dict[str, Any] = {

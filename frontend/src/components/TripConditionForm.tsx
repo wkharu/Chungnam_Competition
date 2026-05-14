@@ -58,7 +58,12 @@ export default function TripConditionForm({ value: f, onChange }: Props) {
             <button
               key={v}
               type="button"
-              onClick={() => patch({ tripDuration: v as TripDuration })}
+              onClick={() =>
+                patch({
+                  tripDuration: v as TripDuration,
+                  durationFullKind: '1d',
+                })
+              }
               className={`text-xs font-semibold px-3 py-2 rounded-full border transition-colors ${
                 f.tripDuration === v
                   ? 'border-primary bg-primary/10 text-primary'

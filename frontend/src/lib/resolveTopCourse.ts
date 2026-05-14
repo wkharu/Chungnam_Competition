@@ -6,11 +6,16 @@ import type {
   TopCourse,
 } from '@/types'
 
-function stepLabels(n: number): string[] {
-  if (n <= 1) return ['오늘의 핵심']
-  if (n === 2) return ['핵심 코스', '가볍게 마무리']
-  if (n === 3) return ['첫 방문', '이어서', '여유롭게 마무리']
-  return Array.from({ length: n }, (_, i) => `${i + 1}번`)
+/** API에 steps가 없을 때만 쓰는 나들이 동선 스타일 라벨(약식) */
+function stepLabelsFlow(n: number): string[] {
+  if (n <= 1) return ['메인 장소']
+  if (n === 2) return ['메인 장소', '식사하기 좋은 곳']
+  if (n === 3) return ['메인 장소', '식사하기 좋은 곳', '카페·마무리']
+  return Array.from({ length: n }, (_, i) => {
+    if (i === 0) return '메인 장소'
+    if (i === n - 1) return '카페·마무리'
+    return '이어서 둘러보기'
+  })
 }
 
 function mergeBullets(row: Destination): string[] {
@@ -73,7 +78,7 @@ export function topCourseFromAlternative(alt: AlternativeCourse, data: Recommend
   }
   const recs = data.recommendations ?? []
   const names = alt.place_names
-  const labels = stepLabels(names.length)
+  const labels = stepLabelsFlow(names.length)
   const steps: CourseStep[] = names.map((name, i) => {
     const row = recs.find(r => r.name === name)
     const oneLine =

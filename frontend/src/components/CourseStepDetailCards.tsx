@@ -1,4 +1,5 @@
 import { MapPin } from 'lucide-react'
+import CourseStepGoogleReviews from '@/components/CourseStepGoogleReviews'
 import type { CourseStep } from '@/types'
 
 interface Props {
@@ -32,6 +33,7 @@ export default function CourseStepDetailCards({ steps }: Props) {
                 {(s.review_count ?? 0).toLocaleString()}건
               </p>
             ) : null}
+            <CourseStepGoogleReviews step={s} />
             {!hasBody ? (
               <p className="text-xs text-muted-foreground mt-2">
                 이 구간은 요약만 있어요. 현장에서 분위기를 확인해 보세요.

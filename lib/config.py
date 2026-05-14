@@ -69,6 +69,26 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _requests_ssl_verify() -> bool | str:
+    """
+    requests의 verify 인자.
+    Windows 등에서 시스템 CA가 비어 Google Places 등 HTTPS가 실패할 때 certifi 번들을 쓴다.
+    개발 전용 탈출구: REQUESTS_SSL_INSECURE=1 (운영에서는 사용 금지).
+    """
+    if _env_bool("REQUESTS_SSL_INSECURE"):
+        print(
+            "[config] WARNING: REQUESTS_SSL_INSECURE=1 — HTTPS 인증서 검증을 끕니다. 운영 환경에서는 사용하지 마세요.",
+            file=sys.stderr,
+        )
+        return False
+    try:
+        import certifi
+
+        return certifi.where()
+    except ImportError:
+        return True
+
+
 # ── 기본 URL (공공데이터·Google 공개 엔드포인트, 비밀 아님) ───────────────
 _DEFAULT_WEATHER_SERVICE_ROOT = "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0"
 _DEFAULT_TOUR_BASE = "https://apis.data.go.kr/B551011/KorService2"
@@ -150,9 +170,24 @@ class Settings:
 
         self.weather_forecast_url: str = _weather_forecast_url()
         self.tour_base_url: str = _tour_base()
+        self.tour_api_timeout_seconds: float = max(
+            1.0,
+            min(10.0, _env_float("TOUR_API_TIMEOUT_SECONDS", 3.0)),
+        )
         self.air_ctprvn_url: str = _air_ctprvn_url()
         self.google_places_search_url: str = _google_places_search_url()
         self.google_places_v1_root: str = _google_places_v1_root()
+        self.requests_ssl_verify: bool | str = _requests_ssl_verify()
+        # requests는 기본적으로 HTTP_PROXY/HTTPS_PROXY 환경변수를 자동 사용한다.
+        # 로컬 개발·일부 샌드박스에서는 127.0.0.1:9 같은 더미 프록시가 잡혀 공공데이터/Google 호출이 전부 실패한다.
+        # 실제 프록시가 필요한 환경에서만 REQUESTS_TRUST_ENV=1 로 켠다.
+        self.requests_trust_env: bool = _env_bool("REQUESTS_TRUST_ENV", False)
+        # /api/recommend 첫 응답 속도 보호: 리뷰/사진 보강은 상위 일부만 동기 처리.
+        # 자세한 리뷰는 장소 상세 모달에서 지연 조회한다.
+        self.main_places_review_max_fetch: int = max(
+            0,
+            min(8, _env_int("MAIN_PLACES_REVIEW_MAX_FETCH", 3)),
+        )
 
         _story_rel = (
             _env_str(
@@ -203,6 +238,24 @@ class Settings:
 
 
 settings = Settings()
+
+
+def requests_session():
+    import requests
+
+    s = requests.Session()
+    s.trust_env = settings.requests_trust_env
+    return s
+
+
+def request_get(url: str, **kwargs):
+    with requests_session() as s:
+        return s.get(url, **kwargs)
+
+
+def request_post(url: str, **kwargs):
+    with requests_session() as s:
+        return s.post(url, **kwargs)
 
 if settings.debug and not (_PROJECT_ROOT / ".env").exists():
     print(

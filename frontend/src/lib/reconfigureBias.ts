@@ -1,6 +1,6 @@
 import type { CourseFetchContext } from '@/lib/courseClient'
 
-export type ReconfigureTag = '' | 'meal' | 'cafe' | 'indoor' | 'photo' | 'kids'
+export type ReconfigureTag = '' | 'meal' | 'cafe' | 'indoor' | 'photo' | 'kids' | 'tourpass' | 'compact'
 
 const TAG_LABEL: Record<Exclude<ReconfigureTag, ''>, string> = {
   meal: '식사 중심',
@@ -8,6 +8,8 @@ const TAG_LABEL: Record<Exclude<ReconfigureTag, ''>, string> = {
   indoor: '실내 위주',
   photo: '사진·뷰',
   kids: '아이 동반',
+  tourpass: '투어패스 후보',
+  compact: '이동 부담 낮게',
 }
 
 export function reconfigureTagLabel(tag: ReconfigureTag): string {
@@ -81,6 +83,25 @@ export function reconfigureContextForTag(tag: ReconfigureTag): Partial<CourseFet
         scenicBias: 0.25,
         familyBias: 1,
         desiredCourseStyle: 'family_focus',
+      }
+    case 'tourpass':
+      return {
+        mealBias: 0.25,
+        cafeBias: 0.2,
+        indoorBias: 0.45,
+        scenicBias: 0.15,
+        familyBias: 0.25,
+        desiredCourseStyle: 'tourpass_preference',
+      }
+    case 'compact':
+      return {
+        desiredNextScene: 'short_walk',
+        mealBias: 0.15,
+        cafeBias: 0.15,
+        indoorBias: 0.35,
+        scenicBias: 0.05,
+        familyBias: 0.12,
+        desiredCourseStyle: 'compact_route',
       }
     default:
       return {}

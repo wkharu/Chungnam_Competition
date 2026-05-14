@@ -177,12 +177,17 @@ def auto_tag(item: dict) -> dict:
     weather_key = "sunny"  # 기본값
     copy_text = COPY_TEMPLATES.get((profile["category"], weather_key), "방문해볼 만한 곳입니다.")
 
+    img_raw = str(item.get("firstimage", "") or "").strip()
+    if img_raw.startswith("http://"):
+        img_raw = "https://" + img_raw[7:]
+
     return {
         "id":          item.get("contentid", ""),
         "name":        item.get("title", ""),
         "city":        _extract_city(item.get("addr1", "")),
         "address":     item.get("addr1", ""),
-        "image":       item.get("firstimage", ""),
+        "image":       img_raw,
+        "contenttypeid": content_type,
         "category":    profile["category"],
         "tags":        profile["tags"],
         "weather_weights":   profile["weather_weights"],

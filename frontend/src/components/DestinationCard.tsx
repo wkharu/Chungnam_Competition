@@ -55,13 +55,20 @@ function ReviewPanel({ name, lat, lng, address }: { name: string; lat: number; l
                       text-xs font-semibold px-3 py-1.5 rounded-full transition-colors">
           K 카카오
         </a>
-        {data?.website && (
+        {data?.website ? (
           <a href={data.website} target="_blank" rel="noopener noreferrer"
              className="flex items-center gap-1 bg-white/20 hover:bg-white/30 text-white
                         text-xs px-3 py-1.5 rounded-full transition-colors">
             <ExternalLink className="w-3 h-3" />홈페이지
           </a>
-        )}
+        ) : null}
+        {data?.google_maps ? (
+          <a href={data.google_maps} target="_blank" rel="noopener noreferrer"
+             className="flex items-center gap-1 bg-white/20 hover:bg-white/30 text-white
+                        text-xs px-3 py-1.5 rounded-full transition-colors">
+            <ExternalLink className="w-3 h-3" />Google 지도
+          </a>
+        ) : null}
       </div>
 
       {open && (
@@ -74,6 +81,12 @@ function ReviewPanel({ name, lat, lng, address }: { name: string; lat: number; l
             <p className="text-xs text-white/60">등록된 리뷰가 없습니다.</p>
           ) : (
             <div className="space-y-3">
+              <p className="text-[11px] font-semibold text-white/85">
+                Google 리뷰 · 평점 높은 순 {data.reviews.length}개
+                {data.review_count > data.reviews.length
+                  ? ` (전체 ${data.review_count.toLocaleString()}건 중)`
+                  : null}
+              </p>
               {data.rating > 0 && (
                 <div className="flex items-center gap-1.5">
                   <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
@@ -109,7 +122,7 @@ function ReviewItem({ review: r, dark }: { review: PlaceReview; dark?: boolean }
         </div>
         <span className={`ml-auto ${subColor}`}>{r.relative}</span>
       </div>
-      <p className={`leading-relaxed line-clamp-3 ${textColor}`}>{r.text}</p>
+      <p className={`leading-relaxed line-clamp-5 ${textColor}`}>{r.text}</p>
     </div>
   )
 }
@@ -146,28 +159,30 @@ function FeaturedCard({
       : []
 
   return (
-    <div className={`relative rounded-3xl overflow-hidden shadow-lg mb-2 transition-all ${
+    <div className={`relative rounded-3xl shadow-lg mb-2 transition-all ${
       isSelected ? 'ring-2 ring-primary' : 'active:scale-[0.99]'
     }`}>
-      {d.image && !imgError ? (
-        <img src={d.image} alt={d.name} loading="lazy"
-          onError={() => setImgError(true)} className="w-full h-64 object-cover" />
-      ) : (
-        <div className="w-full h-64 bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-7xl">
-          {emoji}
+      <div className="relative h-64 rounded-t-3xl overflow-hidden">
+        {d.image && !imgError ? (
+          <img src={d.image} alt={d.name} loading="lazy"
+            onError={() => setImgError(true)} className="w-full h-full object-cover" />
+        ) : (
+          <div className="w-full h-full bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center text-7xl">
+            {emoji}
+          </div>
+        )}
+
+        <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent pointer-events-none" />
+
+        <div className="absolute top-4 left-4 flex items-center gap-1 bg-amber-400 text-amber-900 text-xs font-bold px-2.5 py-1 rounded-full">
+          <Star className="w-3 h-3 fill-current" />오늘의 1위
         </div>
-      )}
-
-      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/20 to-transparent" />
-
-      <div className="absolute top-4 left-4 flex items-center gap-1 bg-amber-400 text-amber-900 text-xs font-bold px-2.5 py-1 rounded-full">
-        <Star className="w-3 h-3 fill-current" />오늘의 1위
-      </div>
-      <div className="absolute top-4 right-4 bg-white/20 backdrop-blur-sm border border-white/30 text-white text-sm font-bold px-3 py-1 rounded-full">
-        {score}점
+        <div className="absolute top-4 right-4 bg-white/20 backdrop-blur-sm border border-white/30 text-white text-sm font-bold px-3 py-1 rounded-full">
+          {score}점
+        </div>
       </div>
 
-      <div className="absolute bottom-0 left-0 right-0 p-5 text-white">
+      <div className="relative z-10 rounded-b-3xl bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 px-5 py-4 text-white -mt-12 pt-14">
         <div className="flex flex-wrap gap-1.5 mb-2">
           {d.tags.slice(0, 3).map(tag => (
             <span key={tag} className="text-[10px] bg-white/20 backdrop-blur-sm border border-white/20 px-2 py-0.5 rounded-full">
@@ -401,6 +416,17 @@ function CompactCard({
           >
             K 카카오
           </a>
+          {data?.google_maps ? (
+            <a
+              href={data.google_maps}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] px-2 py-1 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors font-medium inline-flex items-center gap-0.5"
+            >
+              <ExternalLink className="w-2.5 h-2.5" />
+              Google
+            </a>
+          ) : null}
         </div>
       )}
 
@@ -416,6 +442,12 @@ function CompactCard({
             <p className="text-xs text-muted-foreground pt-3">등록된 리뷰가 없습니다.</p>
           ) : (
             <div className="pt-2 space-y-0">
+              <p className="text-[11px] font-semibold text-foreground/90 pb-1">
+                Google 리뷰 · 평점 높은 순 {data.reviews.length}개
+                {data.review_count > data.reviews.length
+                  ? ` (전체 ${data.review_count.toLocaleString()}건 중)`
+                  : null}
+              </p>
               {data.rating > 0 && (
                 <div className="flex items-center gap-1.5 py-2">
                   <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />

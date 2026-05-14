@@ -19,6 +19,10 @@ export interface Weather {
   weather_source?: string | null
   /** 단기예보에서 골라 쓴 fcstTime 슬롯 (예: "1400") */
   fcst_time_slot?: string | null
+  /** 단기예보 nx·ny에 사용한 시군(가까운 앵커) */
+  forecast_anchor_city?: string | null
+  /** gps_nearest | selected_city | default_city */
+  forecast_anchor_reason?: string | null
 }
 
 export interface Scores {
@@ -273,6 +277,12 @@ export interface RecommendInputSummary {
   current_date?: string
   user_location?: { lat: number; lng: number }
   meal_preference?: string
+  /** 투어패스 활용 모드(선택). false 이면 기존 코스 전용 추천과 동일하게 동작합니다. */
+  tourpass_mode?: boolean
+  tourpass_ticket_type?: string
+  benefit_priority?: string
+  pass_goal?: string | null
+  purchased_status?: string
 }
 
 export interface CourseBadge {
@@ -334,6 +344,18 @@ export interface CourseStep {
   /** Google Places 등에서 온 평점·리뷰 수(본문 리뷰 텍스트는 없음) */
   rating?: number | null
   review_count?: number
+  /** `/api/place-reviews`용 — 있으면 Google 리뷰 UI 노출 */
+  lat?: number | null
+  lng?: number | null
+  /** 투어패스 메타(MVP: 일부 장소만 보강, 비단정·방문 전 확인 전제) */
+  tourpass_available?: boolean | null
+  tourpass_confidence?: number
+  pass_benefit_type?: string
+  pass_value_level?: string
+  pass_category?: string
+  time_ticket_fit?: string
+  pass_notice?: string
+  official_verified?: boolean
 }
 
 export interface TopCourse {
@@ -391,6 +413,50 @@ export interface PlanBlock {
   checks?: string[]
 }
 
+export interface PassQuestMission {
+  mission_index: number
+  role: string
+  label: string
+  place: CourseStep & Record<string, unknown>
+  reason: string
+  pass_signal: string
+  risk_notice: string
+}
+
+export interface PassQuestCard {
+  quest_id: string
+  quest_title: string
+  quest_type: string
+  ticket_type: string
+  summary: string
+  missions: PassQuestMission[]
+  badges: string[]
+  scores: Record<string, number>
+  scores_detail?: Record<string, number>
+  disclaimer?: string
+}
+
+export interface PassQuestRerankMeta {
+  model_used: boolean
+  mode: string
+  confidence: number | null
+  features_used?: string[]
+  explanation?: string | null
+}
+
+export interface PassQuestBundle {
+  enabled: boolean
+  ticket_type?: string
+  benefit_priority?: string
+  pass_goal?: string
+  purchased_status?: string
+  top_pass_quest?: PassQuestCard | null
+  alternative_pass_quests?: PassQuestCard[]
+  pass_quest_rerank?: PassQuestRerankMeta
+  disclaimer?: string
+  future_model_env?: Record<string, string>
+}
+
 export interface RecommendResponse {
   city: string
   weather: Weather
@@ -398,6 +464,14 @@ export interface RecommendResponse {
   total_fetched: number
   recommendations: Destination[]
   input_summary?: RecommendInputSummary
+  main_scoring_model?: {
+    places_review_enrichment?: string
+    places_review_enrichment_limit?: number
+    tourpass_mode?: boolean
+    tourpass_merchant_pool_only?: boolean
+    tourpass_merchant_filter_fallback?: boolean
+    [key: string]: unknown
+  }
   today_course_pitch?: string
   today_course_pitch_source?: 'template' | 'ollama' | 'ollama_failed' | 'none'
   /** 소비자용 — 완성 코스 뷰 */
@@ -436,4 +510,6 @@ export interface RecommendResponse {
     clock_label?: string
     requires_verified_meal_place?: boolean
   }
+  /** 투어패스 활용 모드가 켜졌을 때만 상세. 꺼져 있으면 enabled:false 수준의 최소 필드만 옵니다. */
+  pass_quest?: PassQuestBundle
 }

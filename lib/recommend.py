@@ -6,14 +6,16 @@
 - 30분 인메모리 캐시 (API 과호출 방지)
 """
 import json
+import os
+import sys
 import time
-import requests
+from collections import Counter
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from lib.config import settings
-from lib.daytrip_planner import normalize_intent
+from lib.config import request_get, settings
+from lib.intent_normalize import normalize_intent
 from lib.distance import calc_distance_score, get_user_coords
 from lib.main_scoring import (
     adjust_components_for_precip_prob,
@@ -28,6 +30,13 @@ from lib.scoring_config import MAIN_WEIGHTS
 from lib.auto_tag import auto_tag
 from lib.storytelling_loader import load_storytelling_records
 from lib.storytelling_match import match_storytelling_for_destination, storytelling_fields_for_api
+from lib.review_features import enrich_main_recommendations_shortlist
+from lib.venue_hours_policy import (
+    build_opening_feasibility_meta,
+    should_exclude_primary_recommendation,
+    trip_detail_band,
+)
+from lib.tourpass_catalog import catalog_row_for_place
 
 
 SIGUNGU_CODES = {
@@ -64,12 +73,50 @@ def _load_manual() -> dict:
     return {item["name"]: item for item in items}
 
 
+def _parse_tour_api_items(data: dict) -> list:
+    response = data.get("response") or {}
+    header = response.get("header") or {}
+    if header.get("resultCode") != "0000":
+        return []
+    body = response.get("body") or {}
+    items = body.get("items") or {}
+    if not items:
+        return []
+    result = items.get("item") or []
+    if isinstance(result, dict):
+        result = [result]
+    return [it for it in result if str(it.get("contenttypeid")) not in ("32", "38")]
+
+
+def _fetch_city_via_bridge(sigungu_code: int, num: int) -> list | None:
+    base_url = os.getenv("TOUR_FETCH_URL", "").strip().rstrip("/")
+    if not base_url:
+        return None
+
+    try:
+        r = request_get(
+            f"{base_url}/__tour_area__",
+            params={"sigunguCode": sigungu_code, "num": num},
+            timeout=max(8.0, settings.tour_api_timeout_seconds + 5.0),
+            verify=settings.requests_ssl_verify,
+        )
+        r.raise_for_status()
+        return _parse_tour_api_items(r.json())
+    except Exception:
+        return None
+
+
 # ── 단일 시군 수집 ─────────────────────────────────────
 def _fetch_city(sigungu_code: int, num: int = 100) -> list:
     cache_key = f"city_{sigungu_code}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
+
+    bridged = _fetch_city_via_bridge(sigungu_code, num)
+    if bridged is not None:
+        _cache_set(cache_key, bridged)
+        return bridged
 
     if not settings.tour_api_key:
         return []
@@ -86,21 +133,16 @@ def _fetch_city(sigungu_code: int, num: int = 100) -> list:
         "arrange":     "C",
     }
     try:
-        r = requests.get(
+        r = request_get(
             f"{settings.tour_base_url}/areaBasedList2",
             params=params,
-            timeout=10,
+            timeout=settings.tour_api_timeout_seconds,
+            verify=settings.requests_ssl_verify,
         )
-        data = r.json()
-        if data["response"]["header"]["resultCode"] != "0000":
-            return []
-        body = data["response"]["body"]["items"]
-        result = body["item"] if body else []
+        result = _parse_tour_api_items(r.json())
     except Exception:
         result = []
 
-    # 숙박·쇼핑 제외
-    result = [it for it in result if str(it.get("contenttypeid")) not in ("32", "38")]
     _cache_set(cache_key, result)
     return result
 
@@ -123,7 +165,7 @@ def fetch_and_tag(city: str = "전체", num: int = 100) -> list:
 
     # 병렬 수집
     raw_items = []
-    with ThreadPoolExecutor(max_workers=7) as pool:
+    with ThreadPoolExecutor(max_workers=min(14, max(1, len(codes)))) as pool:
         futures = {pool.submit(_fetch_city, code, num): code for code in codes}
         for future in as_completed(futures):
             raw_items.extend(future.result())
@@ -149,14 +191,38 @@ def fetch_and_tag(city: str = "전체", num: int = 100) -> list:
     api_names = {d["name"] for d in result}
     for name, dest in manual.items():
         if name not in api_names:
-            # 특정 도시 선택 시 해당 도시 수동 데이터만 추가
-            if city != "전체" and dest.get("city") and dest["city"] != city:
-                continue
+            if city != "전체":
+                dc = str(dest.get("city") or "").strip()
+                if dc != city:
+                    continue
             dest = dest.copy()
             dest["source"] = "manual"
             result.append(dest)
 
+    # TourAPI 실패(SSL 등)로 풀이 비면 수동 목록으로 폴백
+    # 특정 시군 선택 시: destinations.json 의 city 가 선택과 일치하는 것만.
+    # city=\"전체\" 일 때만 충남 전체 수동 데이터를 섞는다.
+    if not result:
+        for name, dest in manual.items():
+            if city != "전체":
+                dc = str(dest.get("city") or "").strip()
+                if dc != city:
+                    continue
+            d = dest.copy()
+            d["source"] = (
+                "manual_fallback_city"
+                if city != "전체"
+                else "manual_fallback_any_city"
+            )
+            result.append(d)
+
     return result
+
+
+def _is_tourpass_merchant_place(name: str | None) -> bool:
+    """카탈로그(JSON·CSV)에서 가맹으로 표시된 관광 후보만."""
+    row = catalog_row_for_place(str(name or "").strip())
+    return row.get("tourpass_available") is True
 
 
 # ── 최종 매칭 ──────────────────────────────────────────
@@ -167,27 +233,47 @@ def match_from_api(
     user_lat: float = None,
     user_lng: float = None,
     intent: dict | None = None,
+    tourpass_mode: bool = False,
 ) -> dict:
     """
     가중치(설명 가능): weather_fit, goal_fit, distance_fit, time_fit, season_event_bonus.
     intent가 없으면 기본 의도(healing, half-day 등)로 처리한다.
 
     홈페이지 `/api/recommend`의 **장소 후보 랭킹**은 항상 이 규칙 파이프라인만 사용한다.
+    tourpass_mode=True 이면 우선 카탈로그상 가맹(tourpass_available=True)만 쓰되,
+    가맹이 한 건도 매칭되지 않으면(TourAPI 명칭·별칭 불일치 등) 전체 풀로 폴백한다.
     완성 코스 묶음·순서는 daytrip_planner·course_view에서 규칙으로 만들고,
     코스 단위 재정렬 ML은 lib.course_rerank(번들 있을 때만)에서 선택 적용한다.
     next_scene(/api/course)와 혼동하지 않는다.
     """
     scores = calc_weather_score(weather)
-    destinations = fetch_and_tag(city)
+    destinations_all = fetch_and_tag(city)
+    destination_source_counts = dict(
+        Counter(str(d.get("source") or "tourapi") for d in destinations_all)
+    )
     intent_use = intent if intent is not None else normalize_intent(
         None, None, None, None
     )
+
+    tourpass_merchant_filter_relaxed = False
+    destinations = destinations_all
+    if tourpass_mode:
+        merchants = [
+            d for d in destinations_all if _is_tourpass_merchant_place(d.get("name"))
+        ]
+        if merchants:
+            destinations = merchants
+        else:
+            # 카탈로그 키와 수집 장소명이 어긋나면 여기서 빈 풀 → 코스·Places 보강 전부 실패함
+            destinations = destinations_all
+            tourpass_merchant_filter_relaxed = True
 
     ref_city = city if city != "전체" else "아산"
     if user_lat is None or user_lng is None:
         user_lat, user_lng = get_user_coords(ref_city)
 
     hour = int(weather.get("hour", datetime.now().hour))
+    _trip_band = trip_detail_band(hour)
 
     story_records = load_storytelling_records()
 
@@ -199,6 +285,10 @@ def match_from_api(
         if scores["is_raining"] and dest["category"] == "outdoor":
             continue
         if scores["is_dust_bad"] and w.get("fine_dust_limit") == "good":
+            continue
+
+        excl, _excl_code = should_exclude_primary_recommendation(dest, _trip_band)
+        if excl:
             continue
 
         lat = dest["coords"]["lat"]
@@ -238,6 +328,7 @@ def match_from_api(
         # 하위 호환: weather_score = 날씨 축 원시 적합도
         raw_w = components["weather_fit"]
 
+        opening = build_opening_feasibility_meta(dest, _trip_band)
         row = {
             **dest,
             "score": total,
@@ -249,10 +340,29 @@ def match_from_api(
             "score_contributions": contrib,
             "recommendation_explain": explain,
             "recommendation_summary": explain.get("summary", ""),
+            "opening_feasibility": opening,
         }
         row.update(storytelling_fields_for_api(sm))
         results.append(row)
 
+    results.sort(key=lambda x: x["score"], reverse=True)
+    places_review_enrichment_limit = int(settings.main_places_review_max_fetch)
+    try:
+        enrich_main_recommendations_shortlist(
+            results,
+            intent_use,
+            hour=hour,
+            ref_lat=user_lat,
+            ref_lng=user_lng,
+            precip_prob=float(weather.get("precip_prob", 0) or 0),
+            max_fetch=places_review_enrichment_limit,
+        )
+    except Exception:
+        if settings.debug:
+            import traceback
+
+            print("[recommend] enrich_main_recommendations_shortlist failed:", file=sys.stderr)
+            traceback.print_exc()
     results.sort(key=lambda x: x["score"], reverse=True)
 
     return {
@@ -265,5 +375,14 @@ def match_from_api(
             "weights": dict(MAIN_WEIGHTS),
             "intent_applied": intent_use,
             "note": "휴리스틱 가중 합; 각 항목은 0~1 부분점수. 인원·일정 길이 보정 포함(ML 미사용).",
+            "tourpass_mode": bool(tourpass_mode),
+            "tourpass_merchant_pool_only": bool(
+                tourpass_mode and not tourpass_merchant_filter_relaxed
+            ),
+            "tourpass_merchant_filter_fallback": tourpass_merchant_filter_relaxed,
+            "places_review_enrichment": "top_shortlist",
+            "places_review_enrichment_limit": places_review_enrichment_limit,
+            "destination_pool_count": len(destinations_all),
+            "destination_source_counts": destination_source_counts,
         },
     }

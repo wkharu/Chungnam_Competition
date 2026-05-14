@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { useRecommend } from '@/hooks/useRecommend'
 import { tripFormFromSearchParams } from '@/lib/tripParams'
+import { loadRecommendPayloadForResult } from '@/lib/recommendSessionCache'
 import type { RecommendResponse } from '@/types'
 
 /**
@@ -15,24 +16,20 @@ export function useRecommendFromRoute() {
   const fetchOnceRef = useRef(false)
 
   useEffect(() => {
+    if (searchParams.get('mock') === '1') {
+      hydrate(null)
+      return
+    }
     const fromNav = (location.state as { data?: RecommendResponse } | null)?.data
-    if (fromNav) {
-      hydrate(fromNav)
+    const fromSession = loadRecommendPayloadForResult(searchParams)
+    const inlined = fromNav ?? fromSession
+    if (inlined) {
+      hydrate(inlined)
       return
     }
     if (fetchOnceRef.current) return
     fetchOnceRef.current = true
-    void fetch(
-      form.city,
-      form.tripDuration,
-      {
-        companion: form.companion,
-        trip_goal: form.tripGoal,
-        transport: form.transport,
-        adult_count: form.adultCount,
-        child_count: form.childCount,
-      },
-    )
+    void fetch(form)
   }, [
     location.key,
     location.state,
@@ -45,6 +42,15 @@ export function useRecommendFromRoute() {
     form.transport,
     form.adultCount,
     form.childCount,
+    form.currentTime,
+    form.currentDate,
+    form.mealPreference,
+    form.tourpassMode,
+    form.tourpassTicketType,
+    form.benefitPriority,
+    form.passGoal,
+    form.purchasedStatus,
+    searchParams,
   ])
 
   return { form, data, loading, error, searchParams }
