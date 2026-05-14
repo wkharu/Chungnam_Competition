@@ -18,6 +18,7 @@ import { Badge } from '@/components/consumer/Badge'
 import { CourseHeroCover } from '@/components/consumer/CourseHeroCover'
 import { CourseStepCard } from '@/components/consumer/CourseStepCard'
 import { PlaceDetailModal } from '@/components/consumer/PlaceDetailModal'
+import { LiveStatusBar } from '@/components/consumer/LiveStatusBar'
 import { readFetchErrorMessage } from '@/lib/apiErrorMessage'
 import { logPassQuestEvent } from '@/lib/passQuestAnalytics'
 import { saveRecommendPayloadForResult } from '@/lib/recommendSessionCache'
@@ -140,6 +141,15 @@ export default function ConsumerResultPage() {
     return buildConsumerCourse(data, form)
   }, [data, form, mockMode])
 
+  const payload: RecommendResponse | null = data
+
+  const weatherForBand: Weather | null = useMemo(() => {
+    if (mockMode) return null
+    if (weatherLooksUsable(payload?.weather)) return payload!.weather
+    if (weatherLooksUsable(weatherSnap)) return weatherSnap
+    return null
+  }, [mockMode, payload, weatherSnap])
+
   async function refreshRecommend() {
     setRetryHint(null)
     try {
@@ -187,15 +197,6 @@ export default function ConsumerResultPage() {
     )
   }
 
-  const payload: RecommendResponse | null = data
-
-  const weatherForBand: Weather | null = useMemo(() => {
-    if (mockMode) return null
-    if (weatherLooksUsable(payload?.weather)) return payload!.weather
-    if (weatherLooksUsable(weatherSnap)) return weatherSnap
-    return null
-  }, [mockMode, payload, weatherSnap])
-
   function confirmCourse() {
     if (payload) {
       saveConfirmedCourse({
@@ -210,10 +211,7 @@ export default function ConsumerResultPage() {
   return (
     <div className="consumer-shell pb-36">
       <header className="sticky top-0 z-30 border-b consumer-header-blur">
-        <div className="ios-statusbar">
-          <span>9:41</span>
-          <span className="text-[12px]">▴  Wi-Fi  ▰</span>
-        </div>
+        <LiveStatusBar />
         <div className="flex items-center gap-2 px-2 pb-3">
         <Link
           to={`/?${qs}`}

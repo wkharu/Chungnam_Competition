@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { useRecommend } from '@/hooks/useRecommend'
 import { tripFormFromSearchParams } from '@/lib/tripParams'
-import { loadRecommendPayloadForResult } from '@/lib/recommendSessionCache'
+import { isCurrentRecommendPayload, loadRecommendPayloadForResult } from '@/lib/recommendSessionCache'
 import type { RecommendResponse } from '@/types'
 
 /**
@@ -20,7 +20,8 @@ export function useRecommendFromRoute() {
       hydrate(null)
       return
     }
-    const fromNav = (location.state as { data?: RecommendResponse } | null)?.data
+    const rawNav = (location.state as { data?: RecommendResponse } | null)?.data
+    const fromNav = isCurrentRecommendPayload(rawNav) ? rawNav : null
     const fromSession = loadRecommendPayloadForResult(searchParams)
     const inlined = fromNav ?? fromSession
     if (inlined) {

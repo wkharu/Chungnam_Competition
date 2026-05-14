@@ -50,7 +50,7 @@ export function PlaceDetailModal({
 
   if (!open || !step || !lookup) return null
 
-  const hero = imgBroken ? COURSE_IMAGE_FALLBACK : appImageSrc(step.image)
+  const hero = imgBroken ? COURSE_IMAGE_FALLBACK : appImageSrc(data?.photo_url || step.image)
   const rating = data?.rating ?? step.rating ?? null
   const reviewCount = data?.review_count ?? step.reviewCount ?? 0
   const reviews = data?.reviews ?? []

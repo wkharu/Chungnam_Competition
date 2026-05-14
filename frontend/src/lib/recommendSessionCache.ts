@@ -19,6 +19,17 @@ export function canonicalQueryString(qs: string): string {
   return canonicalTripSearchParams(new URLSearchParams(q))
 }
 
+export function isCurrentRecommendPayload(data: RecommendResponse | null | undefined): data is RecommendResponse {
+  if (!data || typeof data !== 'object') return false
+  const counts = data.main_scoring_model?.destination_source_counts
+  const tourApiCount =
+    counts && typeof counts === 'object' && !Array.isArray(counts)
+      ? Number((counts as Record<string, unknown>).tourapi || 0)
+      : 0
+  const hasStepImage = Boolean(data.top_course?.steps?.some(s => String(s.image || '').trim()))
+  return tourApiCount > 0 && hasStepImage
+}
+
 export function saveRecommendPayloadForResult(
   resultQueryString: string,
   data: RecommendResponse,
@@ -40,7 +51,8 @@ export function loadRecommendPayloadForResult(sp: URLSearchParams): RecommendRes
     if (!saved || saved !== cur) return null
     const raw = sessionStorage.getItem(K_JSON)
     if (!raw) return null
-    return JSON.parse(raw) as RecommendResponse
+    const parsed = JSON.parse(raw) as RecommendResponse
+    return isCurrentRecommendPayload(parsed) ? parsed : null
   } catch {
     return null
   }

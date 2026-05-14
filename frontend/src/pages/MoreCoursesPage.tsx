@@ -17,6 +17,7 @@ import {
 import type { ConsumerAlternativeCourse } from '@/lib/consumerCourseTypes'
 import { Badge } from '@/components/consumer/Badge'
 import { saveRecommendPayloadForResult } from '@/lib/recommendSessionCache'
+import { LiveStatusBar } from '@/components/consumer/LiveStatusBar'
 
 export default function MoreCoursesPage() {
   const navigate = useNavigate()
@@ -79,10 +80,7 @@ export default function MoreCoursesPage() {
   return (
     <div className="consumer-shell pb-8">
       <header className="sticky top-0 z-30 border-b consumer-header-blur">
-        <div className="ios-statusbar">
-          <span>9:41</span>
-          <span className="text-[12px]">▴  Wi-Fi  ▰</span>
-        </div>
+        <LiveStatusBar />
         <div className="flex items-center gap-2 px-3 pb-3">
         <button
           type="button"

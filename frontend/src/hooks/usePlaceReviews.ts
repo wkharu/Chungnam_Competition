@@ -15,6 +15,7 @@ interface ReviewData {
   open_now: boolean | null
   places_status?: 'ok' | 'missing_key' | 'request_failed' | 'no_match' | 'match_too_far'
   places_status_message?: string
+  photo_url?: string | null
 }
 
 export function usePlaceReviews() {

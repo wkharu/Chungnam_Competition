@@ -20,6 +20,7 @@ import { readFetchErrorMessage } from '@/lib/apiErrorMessage'
 import { InputCard } from '@/components/consumer/InputCard'
 import { TourPassToggle } from '@/components/consumer/TourPassToggle'
 import { BottomCTA } from '@/components/consumer/BottomCTA'
+import { LiveStatusBar } from '@/components/consumer/LiveStatusBar'
 import { saveRecommendPayloadForResult } from '@/lib/recommendSessionCache'
 import { writeStoredUserGeo } from '@/lib/userGeoStorage'
 
@@ -36,6 +37,8 @@ export default function HomePage() {
   const [err, setErr] = useState<string | null>(null)
   const [confirmed, setConfirmed] = useState<ConfirmedCourseState | null>(() => loadConfirmedCourse())
   const [weatherSnap, setWeatherSnap] = useState<Weather | null>(null)
+  const [weatherLoading, setWeatherLoading] = useState(true)
+  const [weatherError, setWeatherError] = useState(false)
   const navigate = useNavigate()
   const urlSynced = useRef(false)
 
@@ -75,6 +78,8 @@ export default function HomePage() {
   useEffect(() => {
     let cancelled = false
     async function loadSnap() {
+      setWeatherLoading(true)
+      setWeatherError(false)
       try {
         const q = new URLSearchParams({
           city: form.city === '전체' ? '아산' : form.city,
@@ -83,11 +88,16 @@ export default function HomePage() {
         })
         appendStoredUserGeo(q)
         const res = await window.fetch(`/api/weather-snapshot?${q}`)
-        if (!res.ok) return
+        if (!res.ok) throw new Error('weather snapshot failed')
         const body = (await res.json()) as { weather: Weather }
         if (!cancelled) setWeatherSnap(body.weather)
       } catch {
-        if (!cancelled) setWeatherSnap(null)
+        if (!cancelled) {
+          setWeatherSnap(null)
+          setWeatherError(true)
+        }
+      } finally {
+        if (!cancelled) setWeatherLoading(false)
       }
     }
     void loadSnap()
@@ -128,6 +138,7 @@ export default function HomePage() {
   }
 
   const solo = form.companion === 'solo'
+  const withKids = form.companion === 'family' && Number(form.childCount || 0) > 0
 
   const snapLine = weatherSnap
     ? [
@@ -146,10 +157,7 @@ export default function HomePage() {
   return (
     <div className="consumer-shell pb-28">
       <header className="app-hero-band px-5 pt-[max(0.55rem,env(safe-area-inset-top))] pb-4">
-        <div className="ios-statusbar -mx-1">
-          <span>9:41</span>
-          <span className="text-[12px]">▴  Wi-Fi  ▰</span>
-        </div>
+        <LiveStatusBar className="-mx-1" />
         <div className="mt-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="grid h-9 w-9 place-items-center rounded-xl bg-[#fff0e9] text-[#b45b37] ring-1 ring-[#f1d1bf]">
@@ -167,23 +175,37 @@ export default function HomePage() {
         <p className="text-[14px] text-[#7b6a5c] font-medium mt-2 leading-snug">
           당신의 취향에 딱 맞는 충남 여행을 제안해드려요.
         </p>
-        {weatherSnap ? (
-          <div className="mt-4 rounded-2xl border border-[#eadfce] bg-[#fffdf8] px-4 py-3 shadow-[0_10px_28px_-24px_rgba(80,48,28,0.45)]">
+        <div className="mt-4 rounded-2xl border border-[#eadfce] bg-[#fffdf8] px-4 py-3 shadow-[0_10px_28px_-24px_rgba(80,48,28,0.45)]">
+          {weatherSnap ? (
             <div className="flex items-center gap-3">
               <CloudSun className="h-12 w-12 text-[#f0a33b]" strokeWidth={1.5} />
               <div className="min-w-0 flex-1">
-                <p className="text-[15px] font-black text-[#2b1b12] leading-snug">{form.city === '전체' ? '아산' : form.city} · {snapLine || '요약 없음'}</p>
-                <p className="text-[12px] text-[#7b6a5c] mt-0.5">야외 활동하기 좋은 날씨예요.</p>
+                <p className="text-[15px] font-black text-[#2b1b12] leading-snug">
+                  {form.city === '전체' ? '아산' : form.city} · {snapLine || '요약 없음'}
+                </p>
+                <p className="text-[12px] text-[#7b6a5c] mt-0.5">
+                  {weatherSnap.weather_source === 'vilagefcst' ? '기상청 단기예보 기준이에요.' : '대체 날씨 기준이에요.'}
+                </p>
               </div>
             </div>
-            {weatherSnap.forecast_anchor_reason === 'gps_nearest' && weatherSnap.forecast_anchor_city ? (
+          ) : (
+            <div className="flex items-center gap-3">
+              <CloudSun className="h-12 w-12 text-[#d5a46e]" strokeWidth={1.5} />
+              <div className="min-w-0 flex-1">
+                <p className="text-[15px] font-black text-[#2b1b12] leading-snug">
+                  {weatherLoading ? '실시간 날씨 확인 중…' : weatherError ? '날씨 연결 확인 필요' : '날씨 요약 대기 중'}
+                </p>
+                <p className="text-[12px] text-[#7b6a5c] mt-0.5">추천은 서버 예보를 다시 확인해서 계산해요.</p>
+              </div>
+            </div>
+          )}
+          {weatherSnap?.forecast_anchor_reason === 'gps_nearest' && weatherSnap.forecast_anchor_city ? (
               <p className="text-[11px] text-[#7b6a5c] font-semibold mt-2">
                 내 위치에 가까운 격자{' '}
                 <span className="font-extrabold">{weatherSnap.forecast_anchor_city}</span>
               </p>
             ) : null}
-          </div>
-        ) : null}
+        </div>
       </header>
 
       <main className="flex-1 px-5 pt-1 space-y-5 overflow-y-auto">
@@ -312,7 +334,7 @@ export default function HomePage() {
           <div className="flex flex-wrap gap-2">
             {(
               [
-                ['car', '렌터카'],
+                ['car', '자차'],
                 ['public', '대중교통'],
                 ['walk', '도보 위주'],
               ] as const
@@ -331,17 +353,33 @@ export default function HomePage() {
 
         {!solo ? (
           <InputCard title="인원">
-            <div className="travel-field">
-              <button type="button" className="grid h-8 w-8 place-items-center rounded-lg border border-[#eadfce] bg-white" onClick={() => patch({ adultCount: String(Math.max(1, Number(form.adultCount || 1) - 1)) })}>
-                <Minus className="h-4 w-4" />
-              </button>
-              <div className="flex items-center gap-2">
-                <UsersRound className="h-4 w-4 text-[#8b5f40]" />
-                <span>{form.adultCount}명</span>
+            <div className="space-y-2.5">
+              <div className="travel-field">
+                <button type="button" className="grid h-8 w-8 place-items-center rounded-lg border border-[#eadfce] bg-white" onClick={() => patch({ adultCount: String(Math.max(1, Number(form.adultCount || 1) - 1)) })}>
+                  <Minus className="h-4 w-4" />
+                </button>
+                <div className="flex items-center gap-2">
+                  <UsersRound className="h-4 w-4 text-[#8b5f40]" />
+                  <span>성인 {form.adultCount}명</span>
+                </div>
+                <button type="button" className="grid h-8 w-8 place-items-center rounded-lg border border-[#eadfce] bg-white" onClick={() => patch({ adultCount: String(Math.min(10, Number(form.adultCount || 1) + 1)) })}>
+                  <Plus className="h-4 w-4" />
+                </button>
               </div>
-              <button type="button" className="grid h-8 w-8 place-items-center rounded-lg border border-[#eadfce] bg-white" onClick={() => patch({ adultCount: String(Math.min(10, Number(form.adultCount || 1) + 1)) })}>
-                <Plus className="h-4 w-4" />
-              </button>
+              {withKids ? (
+                <div className="travel-field">
+                  <button type="button" className="grid h-8 w-8 place-items-center rounded-lg border border-[#eadfce] bg-white" onClick={() => patch({ childCount: String(Math.max(1, Number(form.childCount || 1) - 1)) })}>
+                    <Minus className="h-4 w-4" />
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <UsersRound className="h-4 w-4 text-[#8b5f40]" />
+                    <span>아이 {form.childCount}명</span>
+                  </div>
+                  <button type="button" className="grid h-8 w-8 place-items-center rounded-lg border border-[#eadfce] bg-white" onClick={() => patch({ childCount: String(Math.min(8, Number(form.childCount || 1) + 1)) })}>
+                    <Plus className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : null}
             </div>
           </InputCard>
         ) : null}
